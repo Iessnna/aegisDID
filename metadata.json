@@ -1,0 +1,6 @@
+{
+  "name": "AegisDID - Decentralized Identity & AI Fraud Shield",
+  "description": "Decentralized self-sovereign identity with cryptographically verifiable credentials, zero-knowledge proofs, and real-time AI behavioral and network analysis for privacy-preserving Sybil and bot defense without centralized KYC.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
