@@ -6,6 +6,19 @@ import {defineConfig} from 'vite';
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            wallet: ['./src/components/DIDWalletView.tsx'],
+            behavioral: ['./src/components/BehavioralRadarView.tsx'],
+            network: ['./src/components/NetworkGraphView.tsx'],
+            dapps: ['./src/components/DAppGatewayView.tsx'],
+            lab: ['./src/components/AttackDefenseLabView.tsx'],
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

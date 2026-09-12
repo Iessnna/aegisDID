@@ -114,4 +114,12 @@ Returns `{ "success": true, "analysis": "...", "timestamp": "..." }`.
 - `429`: login or AI rate limit exceeded.
 - `500`: unexpected server failure.
 
-The demo auth store is file-backed at `data/auth.json` and ignored by Git. Use SQLite/Postgres for multi-instance deployment.
+The demo auth store is file-backed at `data/auth.json` and ignored by Git. Use SQLite/Postgres for multi-instance deployment. `REDIS_URL` is optional; when Redis is unavailable the server uses local memory/file fallbacks. The installed `@mstblockchain/mst-vibe-kit` package is used as the official MST scaffolding/deployment path; runtime anchoring uses the optional EVM registry adapter in `src/lib/mstAnchor.ts`. Set `MST_RPC_URL`, `MST_PRIVATE_KEY`, and `MST_CREDENTIAL_REGISTRY_ADDRESS` only after deploying `contracts/AegisCredentialRegistry.sol` to enable real anchoring.
+
+### MST status
+
+```http
+GET /api/blockchain/status
+```
+
+Returns whether the server has enough configuration to submit registry transactions. The app remains fully functional when it returns `configured: false`.

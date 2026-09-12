@@ -3,9 +3,12 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
+import compression from 'compression';
+import { createClient, type RedisClientType } from 'redis';
 import { webcrypto, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { promisify } from 'node:util';
+import { mstAnchor } from './src/lib/mstAnchor';
 
 dotenv.config();
 
@@ -14,11 +17,21 @@ if (!process.env.AUTH_HASH_SALT || process.env.AUTH_HASH_SALT === 'aegis-develop
 }
 
 const app = express();
-const PORT = 3000;
+app.set('trust proxy', 1);
+const PORT = Number(process.env.PORT || 3000);
 const serverCrypto = webcrypto;
 const scrypt = promisify(scryptCallback);
 const authStorePath = path.join(process.cwd(), 'data', 'auth.json');
 const sessionDurationMs = 7 * 24 * 60 * 60 * 1000;
+const redisClient: RedisClientType = createClient({
+  url: process.env.REDIS_URL || 'redis://localhost:6379',
+  socket: { reconnectStrategy: false },
+});
+let redisReady = false;
+const localResponseCache = new Map<string, { value: string; expiresAt: number }>();
+
+redisClient.on('error', error => console.warn('Redis unavailable; using local fallbacks:', error.message));
+redisClient.connect().then(() => { redisReady = true; }).catch(() => { redisReady = false; });
 
 interface ApiKeyRecord {
   id: string;
@@ -82,6 +95,24 @@ async function hashApiKey(value: string): Promise<string> {
   return (await hashPassword(value, Buffer.from(process.env.AUTH_HASH_SALT || 'aegis-development-salt'))).toString('hex');
 }
 
+async function getCachedResponse(key: string): Promise<string | null> {
+  const local = localResponseCache.get(key);
+  if (local && local.expiresAt > Date.now()) return local.value;
+  if (local) localResponseCache.delete(key);
+  if (!redisReady) return null;
+  try {
+    const value = await redisClient.get(key);
+    return typeof value === 'string' ? value : null;
+  } catch { return null; }
+}
+
+async function setCachedResponse(key: string, value: string, ttlSeconds: number): Promise<void> {
+  localResponseCache.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
+  if (localResponseCache.size > 100) localResponseCache.delete(localResponseCache.keys().next().value!);
+  if (!redisReady) return;
+  try { await redisClient.setEx(key, ttlSeconds, value); } catch { /* optional optimization */ }
+}
+
 function readSessionToken(req: Request): string | null {
   const cookies = req.headers.cookie?.split(';').map(cookie => cookie.trim()) || [];
   const sessionCookie = cookies.find(cookie => cookie.startsWith('aegis_session='));
@@ -121,6 +152,7 @@ async function createSession(userId: string, res: Response): Promise<void> {
   setSessionCookie(res, token);
 }
 
+app.use(compression());
 app.use(express.json({ limit: '10mb' }));
 app.use((error: any, req: Request, res: Response, next: express.NextFunction) => {
   const parseError = error as SyntaxError & { status?: number; body?: unknown };
@@ -132,6 +164,7 @@ app.use((error: any, req: Request, res: Response, next: express.NextFunction) =>
 
 // Lazy Google GenAI Client
 let genAIClient: GoogleGenAI | null = null;
+const geminiResponseCache = new Map<string, { value: string; expiresAt: number }>();
 const requestWindows = new Map<string, { startedAt: number; count: number }>();
 const maxAiRequestsPerMinute = 30;
 const maxLoginAttemptsPerWindow = 5;
@@ -223,9 +256,11 @@ async function verifyEcdsa(message: string, signatureHex: string, publicKeyJwk: 
   }
 }
 
-async function verifyCredential(credential: any): Promise<boolean> {
+async function verifyCredential(credential: any, expectedSubjectDid?: string): Promise<boolean> {
   const publicKeyJwk = credential?.proof?.publicKeyJwk;
   if (!publicKeyJwk || !credential?.proof?.signatureValue || !credential?.proof?.claimHashes) return false;
+  if (!credential?.issuer?.id || credential.proof.verificationMethod !== `${credential.issuer.id}#key-1`) return false;
+  if (expectedSubjectDid && credential?.credentialSubject?.id !== expectedSubjectDid) return false;
   const claims = { ...credential.credentialSubject };
   delete claims.id;
   const expectedClaimHashes = credential.proof.claimHashes as Record<string, string>;
@@ -251,7 +286,7 @@ async function verifyCredential(credential: any): Promise<boolean> {
 async function verifyPresentation(presentation: any): Promise<boolean> {
   const proof = presentation?.proof;
   if (!proof?.publicKeyJwk || !proof.signatureValue) return false;
-  const credentialsValid = await Promise.all((presentation.verifiableCredential || []).map((credential: any) => verifyCredential(credential)));
+  const credentialsValid = await Promise.all((presentation.verifiableCredential || []).map((credential: any) => verifyCredential(credential, presentation.holder)));
   if (!credentialsValid.every(Boolean)) return false;
   for (const predicateProof of presentation.zkProofs?.predicateProofs || []) {
     const credentialClaim = (presentation.verifiableCredential || [])
@@ -272,6 +307,18 @@ async function verifyPresentation(presentation: any): Promise<boolean> {
   });
   return verifyEcdsa(presentationPayload, proof.signatureValue, proof.publicKeyJwk);
 }
+
+async function queueMstIdentityAnchors(presentation: any): Promise<void> {
+  if (!mstAnchor.status.configured) return;
+  try {
+    await mstAnchor.registerDID(presentation.holder, presentation.proof.publicKeyJwk);
+    await Promise.all((presentation.verifiableCredential || []).map((credential: any) =>
+      mstAnchor.anchorCredential(credential, credential.issuer?.id || 'unknown', presentation.holder),
+    ));
+  } catch (error: any) {
+    console.warn('Optional MST identity anchoring failed:', error?.message || error);
+  }
+}
 function getGenAI(): GoogleGenAI | null {
   if (!genAIClient && process.env.GEMINI_API_KEY) {
     genAIClient = new GoogleGenAI({
@@ -291,6 +338,11 @@ async function generateWithGeminiFallback(prompt: string): Promise<string | null
   const ai = getGenAI();
   if (!ai) return null;
 
+  const promptHash = await sha256(prompt);
+  const cached = geminiResponseCache.get(promptHash);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  if (cached) geminiResponseCache.delete(promptHash);
+
   const candidateModels = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.7-flash'];
 
   for (const model of candidateModels) {
@@ -300,7 +352,13 @@ async function generateWithGeminiFallback(prompt: string): Promise<string | null
         contents: prompt,
       });
       if (response.text && response.text.trim().length > 0) {
-        return response.text.trim();
+        const value = response.text.trim();
+        geminiResponseCache.set(promptHash, { value, expiresAt: Date.now() + 5 * 60 * 1000 });
+        if (geminiResponseCache.size > 100) {
+          const oldestKey = geminiResponseCache.keys().next().value;
+          if (oldestKey) geminiResponseCache.delete(oldestKey);
+        }
+        return value;
       }
     } catch (err: any) {
       // If 503 (high demand) or 429 (rate limit), continue to next fallback model
@@ -321,6 +379,8 @@ app.get('/api/health', (req: Request, res: Response) => {
   res.json({
     status: 'ok',
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+    redisConfigured: redisReady,
+    mstIntegration: mstAnchor.status,
     timestamp: new Date().toISOString(),
     system: 'AegisDID Decentralized Identity & AI Fraud Shield',
   });
@@ -391,6 +451,10 @@ app.get('/api/auth/me', async (req: Request, res: Response) => {
   res.json({ authenticated: true, user: { id: user.id, email: user.email }, apiKeys: user.apiKeys.map(({ hash, ...metadata }) => metadata) });
 });
 
+app.get('/api/blockchain/status', (req: Request, res: Response) => {
+  res.json(mstAnchor.status);
+});
+
 // Raw API keys are returned once at creation and only their metadata is persisted afterward.
 app.post('/api/auth/api-keys', async (req: Request, res: Response) => {
   const user = await requireAuthenticatedUser(req, res);
@@ -437,6 +501,7 @@ app.post('/api/ai/analyze-behavior-and-fraud', async (req: Request, res: Respons
         return res.status(400).json({ error: 'Invalid presentation challenge binding' });
       }
       if (!(await verifyPresentation(presentation))) return res.status(400).json({ error: 'Credential or presentation signature verification failed' });
+      void queueMstIdentityAnchors(presentation);
       if (!Number.isFinite(challengeAge) || challengeAge < 0 || challengeAge > 5 * 60 * 1000) {
         return res.status(400).json({ error: 'Presentation expired' });
       }
@@ -587,7 +652,7 @@ Provide a concise, highly professional security assessment summarizing the behav
 
     const auditSignature = `0x${Buffer.from(`aegis-audit:${Date.now()}:${finalHumanityScore}:${holderDid}`).toString('base64').substring(0, 48)}`;
 
-    res.json({
+    const analysisResult = {
       humanityScore: finalHumanityScore,
       confidenceScore: aiConfidence,
       botProbability: finalBotProb,
@@ -607,7 +672,14 @@ Provide a concise, highly professional security assessment summarizing the behav
       explainableSummary: aiSummary,
       aiTimestamp: new Date().toISOString(),
       auditSignature,
-    });
+      mst: mstAnchor.status,
+    };
+    if (mstAnchor.status.configured && decision === 'VERIFIED_HUMAN') {
+      void mstAnchor.logAuditRecord({ userId: holderDid, decision, humanityScore: finalHumanityScore }).catch(error => {
+        console.warn('Optional MST audit anchoring failed:', error.message);
+      });
+    }
+    res.json(analysisResult);
   } catch (error: any) {
     console.error('Error in analyze-behavior-and-fraud:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
@@ -627,17 +699,24 @@ Known Sybil Suspicion Count: ${nodes?.filter((n: any) => n.isSybilSuspect)?.leng
 
 Summarize how EigenTrust and SybilRank prevent bot syndicates from gaining disproportionate platform voting or airdrop power without requiring centralized passport KYC. Keep it to 3 concise bullet points.`;
 
+  const cacheKey = `aegis:network-audit:${await sha256(JSON.stringify({ nodes, edges }))}`;
+  const cachedResponse = await getCachedResponse(cacheKey);
+  if (cachedResponse) return res.json(JSON.parse(cachedResponse));
+
     let analysis = await generateWithGeminiFallback(prompt);
 
     if (!analysis) {
       analysis = `• Trust Seed Anchoring: Root authority credentials propagate trust through verified social distance, neutralizing isolated bot farm clusters.\n• Collusion Attack Isolation: Closed circular endorsement rings receive near-zero EigenTrust (<0.05) despite high internal link counts.\n• Privacy Preservation: Sybil defense relies purely on topological graph entropy and zero-knowledge commitments without storing raw user identity databases.`;
     }
 
-    res.json({
+    const result = {
       success: true,
       analysis,
       timestamp: new Date().toISOString(),
-    });
+      mst: mstAnchor.status,
+    };
+    await setCachedResponse(cacheKey, JSON.stringify(result), 300);
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

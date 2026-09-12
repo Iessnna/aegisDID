@@ -3,13 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useCallback } from 'react';
 import { Navbar } from './components/Navbar';
-import { DIDWalletView } from './components/DIDWalletView';
-import { BehavioralRadarView } from './components/BehavioralRadarView';
-import { NetworkGraphView } from './components/NetworkGraphView';
-import { DAppGatewayView } from './components/DAppGatewayView';
-import { AttackDefenseLabView } from './components/AttackDefenseLabView';
 import { AuthPanel } from './components/AuthPanel';
 import { 
   KeyPairData, DIDDocument, VerifiableCredential, BehavioralTelemetry, 
@@ -25,6 +20,18 @@ import {
 import { 
   generateInitialIdentityGraph, GraphDataset 
 } from './lib/networkGraph';
+
+const DIDWalletView = lazy(() => import('./components/DIDWalletView').then(module => ({ default: module.DIDWalletView })));
+const BehavioralRadarView = lazy(() => import('./components/BehavioralRadarView').then(module => ({ default: module.BehavioralRadarView })));
+const NetworkGraphView = lazy(() => import('./components/NetworkGraphView').then(module => ({ default: module.NetworkGraphView })));
+const DAppGatewayView = lazy(() => import('./components/DAppGatewayView').then(module => ({ default: module.DAppGatewayView })));
+const AttackDefenseLabView = lazy(() => import('./components/AttackDefenseLabView').then(module => ({ default: module.AttackDefenseLabView })));
+
+const LoadingSpinner = () => (
+  <div className="flex min-h-[24rem] items-center justify-center" role="status" aria-label="Loading workspace">
+    <div className="h-10 w-10 animate-spin rounded-full border-2 border-cyan-400/20 border-b-cyan-400" />
+  </div>
+);
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'wallet' | 'behavioral' | 'network' | 'dapps' | 'lab'>('wallet');
@@ -346,10 +353,8 @@ export default function App() {
       return result;
     } catch (err) {
       console.error('Error verifying presentation:', err);
-      const fallback = buildLocalAnalysis(globalBehavioralCollector.getTelemetry());
-      setLatestAiAnalysis(fallback);
-      setActionError(err instanceof Error && err.message === 'AUTH_REQUIRED' ? 'Sign in or enable a valid API key to submit a server-verified presentation.' : err instanceof Error && err.message === 'RATE_LIMIT' ? 'AI request limit reached: 30 requests per minute for this session/key.' : 'Verification used the local trust engine because the remote verifier was unavailable.');
-      return fallback;
+      setActionError(err instanceof Error && err.message === 'AUTH_REQUIRED' ? 'Sign in or enable a valid API key to submit a server-verified presentation.' : err instanceof Error && err.message === 'RATE_LIMIT' ? 'AI request limit reached: 30 requests per minute for this session/key.' : 'Remote presentation verification failed. No dApp access was granted.');
+      return null;
     } finally {
       setIsAiLoading(false);
     }
@@ -495,50 +500,50 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
         {activeTab === 'wallet' && (
-          <DIDWalletView
-            userDid={userDid}
-            keyPairData={keyPairData}
-            didDocument={didDocument}
-            credentials={credentials}
-            onGenerateNewIdentity={rotateIdentity}
-            onAddCredential={handleAddCredential}
-          />
+          <Suspense fallback={<LoadingSpinner />}><DIDWalletView
+              userDid={userDid}
+              keyPairData={keyPairData}
+              didDocument={didDocument}
+              credentials={credentials}
+              onGenerateNewIdentity={rotateIdentity}
+              onAddCredential={handleAddCredential}
+            /></Suspense>
         )}
 
         {activeTab === 'behavioral' && (
-          <BehavioralRadarView
+          <Suspense fallback={<LoadingSpinner />}><BehavioralRadarView
             telemetry={telemetry}
             latestAiAnalysis={latestAiAnalysis}
             onRunAiAnalysis={handleRunAiAnalysis}
             isAiLoading={isAiLoading}
-          />
+          /></Suspense>
         )}
 
         {activeTab === 'network' && (
-          <NetworkGraphView
+          <Suspense fallback={<LoadingSpinner />}><NetworkGraphView
             graphData={graphData}
             userDid={userDid}
             onAuditNetwork={handleAuditNetwork}
             networkAuditSummary={networkAuditSummary}
             isAuditing={isAuditing}
-          />
+          /></Suspense>
         )}
 
         {activeTab === 'dapps' && (
-          <DAppGatewayView
+          <Suspense fallback={<LoadingSpinner />}><DAppGatewayView
             userDid={userDid}
             userPrivateKey={cryptoKeyPair?.privateKey || null}
             userPublicKeyJwk={keyPairData?.publicKeyJwk || null}
             credentials={credentials}
             onVerifyDAppPresentation={handleVerifyDAppPresentation}
-          />
+          /></Suspense>
         )}
 
         {activeTab === 'lab' && (
-          <AttackDefenseLabView
+          <Suspense fallback={<LoadingSpinner />}><AttackDefenseLabView
             onRunAttackSimulation={handleRunAttackSimulation}
             isAiLoading={isAiLoading}
-          />
+          /></Suspense>
         )}
       </main>
 

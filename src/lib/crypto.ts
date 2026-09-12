@@ -298,7 +298,7 @@ export async function createVerifiablePresentation(params: {
   return {
     id: presentationId,
     type: ['VerifiablePresentation', 'AegisZeroKYCPresentation'],
-    verifiableCredential: credentials,
+    verifiableCredential: credentials.filter(credential => selectedDisclosures.some(disclosure => disclosure.credentialId === credential.id)),
     holder: holderDid,
     presentationNonce: verifierNonce,
     audience,

@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: aegis-did
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/blockchain/status
+    disk:
+      name: aegis-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_HASH_SALT
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: MST_NETWORK
+        value: testnet
+      - key: MST_RPC_URL
+        value: https://testnetrpc.mstblockchain.com
+      - key: MST_PRIVATE_KEY
+        sync: false
+      - key: MST_CREDENTIAL_REGISTRY_ADDRESS
+        sync: false
