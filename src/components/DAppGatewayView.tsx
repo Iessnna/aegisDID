@@ -10,6 +10,7 @@ import { VerifiablePresentationModal } from './VerifiablePresentationModal';
 interface DAppGatewayViewProps {
   userDid: string;
   userPrivateKey: CryptoKey | null;
+  userPublicKeyJwk: JsonWebKey | null;
   credentials: VerifiableCredential[];
   onVerifyDAppPresentation: (presentation: VerifiablePresentation) => Promise<FraudAnalysisResult | null>;
 }
@@ -17,6 +18,7 @@ interface DAppGatewayViewProps {
 export const DAppGatewayView: React.FC<DAppGatewayViewProps> = ({
   userDid,
   userPrivateKey,
+  userPublicKeyJwk,
   credentials,
   onVerifyDAppPresentation,
 }) => {
@@ -310,6 +312,7 @@ export const DAppGatewayView: React.FC<DAppGatewayViewProps> = ({
           dappRequest={selectedDapp}
           userDid={userDid}
           userPrivateKey={userPrivateKey}
+          userPublicKeyJwk={userPublicKeyJwk}
           credentials={credentials}
           onVerifyComplete={handleVerifyPresentation}
         />

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Fingerprint, Activity, MousePointer, Keyboard, Bot, User, 
   Sparkles, Gauge, ShieldAlert, CheckCircle2, RefreshCw, Cpu, 
-  Zap, Info, CornerDownRight, Play
+  Zap, Info, CornerDownRight, Play, Shield, CircleAlert
 } from 'lucide-react';
 import { BehavioralTelemetry, FraudAnalysisResult } from '../types';
 import { globalBehavioralCollector } from '../lib/behavioralBiometrics';
@@ -24,6 +24,11 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
   const [activeSimulation, setActiveSimulation] = useState<'organic' | 'linear_bot' | 'instant_replay'>('organic');
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [mouseTrail, setMouseTrail] = useState<{ x: number; y: number }[]>([]);
+  const [securityEvents, setSecurityEvents] = useState<Array<{ time: string; message: string; kind: 'ok' | 'warn' | 'danger' }>>([
+    { time: new Date().toLocaleTimeString(), message: 'Identity session initialized', kind: 'ok' },
+    { time: new Date().toLocaleTimeString(), message: 'Behavioral listener active', kind: 'ok' },
+    { time: new Date().toLocaleTimeString(), message: 'Zero-knowledge predicates ready', kind: 'ok' },
+  ]);
 
   // Track canvas mouse movements
   const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -86,6 +91,12 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
 
   const handleSimulateMode = (mode: 'organic' | 'linear_bot' | 'instant_replay') => {
     setActiveSimulation(mode);
+    const event = mode === 'organic'
+      ? { message: 'Organic human mode restored', kind: 'ok' as const }
+      : mode === 'linear_bot'
+        ? { message: 'Scripted bot telemetry injected', kind: 'warn' as const }
+        : { message: 'DOM injection signature staged', kind: 'danger' as const };
+    setSecurityEvents(prev => [{ time: new Date().toLocaleTimeString(), ...event }, ...prev].slice(0, 6));
     if (mode === 'organic') {
       globalBehavioralCollector.reset();
       setMouseTrail([]);
@@ -102,14 +113,71 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
 
   const handleTriggerAnalysis = () => {
     const currentTelemetry = globalBehavioralCollector.getTelemetry();
+    setSecurityEvents(prev => [{
+      time: new Date().toLocaleTimeString(),
+      message: 'Neural trust audit requested',
+      kind: 'ok',
+    }, ...prev].slice(0, 6));
     onRunAiAnalysis(currentTelemetry, activeSimulation === 'organic' ? undefined : activeSimulation);
   };
 
+  useEffect(() => {
+    if (!latestAiAnalysis) return;
+    const isThreat = latestAiAnalysis.decision !== 'VERIFIED_HUMAN';
+    setSecurityEvents(prev => [{
+      time: new Date().toLocaleTimeString(),
+      message: isThreat ? `Threat blocked: ${latestAiAnalysis.decision}` : 'Humanity verified by neural trust engine',
+      kind: isThreat ? 'danger' : 'ok',
+    }, ...prev].slice(0, 6));
+  }, [latestAiAnalysis]);
+
   const humanityScore = latestAiAnalysis ? latestAiAnalysis.humanityScore : (activeSimulation === 'organic' ? 95 : 12);
   const botProb = latestAiAnalysis ? latestAiAnalysis.botProbability : (activeSimulation === 'organic' ? 5 : 88);
+  const isHuman = humanityScore >= 70;
+  const scoreColor = isHuman ? '#b8ef78' : '#ff4d6d';
 
   return (
     <div className="space-y-6">
+      {/* Judge-facing verification hero */}
+      <section className={`relative overflow-hidden rounded-3xl border p-5 sm:p-8 ${isHuman ? 'border-cyan-400/20 bg-[radial-gradient(circle_at_50%_20%,rgba(72,215,232,0.16),transparent_45%),#0b1424' : 'border-rose-400/30 bg-[radial-gradient(circle_at_50%_20%,rgba(255,77,109,0.15),transparent_45%),#170d18'}`}>
+        <div className="relative grid items-center gap-8 lg:grid-cols-[1fr_auto_1fr]">
+          <div className="text-center lg:text-left">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-[#b8ef78]">Decentralized humanity verification</p>
+            <h2 className="aegis-display mt-3 max-w-md text-3xl font-semibold tracking-tight text-white sm:text-4xl">Prove the human behind the key.</h2>
+            <p className="mt-3 max-w-md text-sm leading-relaxed text-slate-400">Behavioral AI, trust graph context, and zero-knowledge identity work together without exposing personal data.</p>
+          </div>
+
+          <div className="mx-auto flex flex-col items-center">
+            <div className="relative flex h-44 w-44 items-center justify-center rounded-full" style={{ background: `conic-gradient(${scoreColor} ${humanityScore * 3.6}deg, rgba(148,163,184,0.12) 0deg)` }}>
+              <div className="flex h-36 w-36 flex-col items-center justify-center rounded-full bg-[#071018] shadow-inner">
+                <span className="aegis-display text-5xl font-semibold text-white">{humanityScore}</span>
+                <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-500">human / 100</span>
+              </div>
+            </div>
+            <div className={`mt-4 flex items-center gap-2 text-xs font-bold uppercase tracking-wider ${isHuman ? 'text-[#b8ef78]' : 'text-rose-300'}`}>
+              {isHuman ? <CheckCircle2 className="h-4 w-4" /> : <CircleAlert className="h-4 w-4" />}
+              {isHuman ? 'Verified human' : 'Automation blocked'}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 text-center lg:text-left">
+            {[
+              { label: 'Behavioral AI', value: 'ACTIVE', color: 'text-cyan-300' },
+              { label: 'Trust graph', value: '0.88', color: 'text-[#b8ef78]' },
+              { label: 'ZK identity', value: 'PRIVATE', color: 'text-amber-300' },
+            ].map(signal => (
+              <div key={signal.label} className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
+                <span className="block text-[9px] uppercase tracking-wider text-slate-500">{signal.label}</span>
+                <span className={`mt-2 block font-mono text-xs font-bold ${signal.color}`}>{signal.value}</span>
+              </div>
+            ))}
+            <div className="col-span-3 mt-1 flex items-center justify-between border-t border-white/10 pt-3 font-mono text-[10px] text-slate-500">
+              <span>BOT RISK</span><span className={isHuman ? 'text-[#b8ef78]' : 'text-rose-300'}>{botProb}%</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* Top Banner */}
       <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950/30 to-slate-900 border border-slate-800 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="space-y-1">
@@ -143,7 +211,7 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
           <span className="font-semibold">Interactive Mode Selector:</span>
         </div>
 
-        <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+        <div className="grid w-full grid-cols-1 gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 sm:w-auto sm:grid-cols-3">
           <button
             onClick={() => handleSimulateMode('organic')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all ${
@@ -153,7 +221,7 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
             }`}
           >
             <User className="w-3.5 h-3.5" />
-            <span>Organic Live Human</span>
+                <span>Live human</span>
           </button>
 
           <button
@@ -165,7 +233,7 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
             }`}
           >
             <Bot className="w-3.5 h-3.5" />
-            <span>Simulate Linear Scripted Bot</span>
+                <span>Scripted bot</span>
           </button>
 
           <button
@@ -177,11 +245,12 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
             }`}
           >
             <Bot className="w-3.5 h-3.5" />
-            <span>Simulate DOM Injection Script</span>
+                <span>DOM attack</span>
           </button>
         </div>
       </div>
 
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_280px]">
       {/* Main Grid: Biometric Meters & Interactive Playground */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         {/* Left Column: Live Radar Gauges */}
@@ -379,7 +448,7 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
             <div className="p-4 rounded-2xl bg-slate-900/90 border border-cyan-900/50 shadow-lg space-y-2 animate-in fade-in">
               <div className="flex items-center gap-2 text-cyan-400 text-xs font-bold">
                 <Sparkles className="w-4 h-4" />
-                <span>Gemini 3.7 Neural Assessment Summary</span>
+                <span>Neural Assessment Summary</span>
               </div>
               <p className="text-xs text-slate-200 leading-relaxed font-sans">
                 {latestAiAnalysis.explainableSummary}
@@ -391,6 +460,22 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
             </div>
           )}
         </div>
+      </div>
+
+        <aside className="h-fit rounded-2xl border border-slate-800 bg-slate-900 p-4">
+          <div className="mb-4 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs font-semibold text-white"><Activity className="h-4 w-4 text-cyan-400" /> Live security events</div>
+            <span className="h-2 w-2 rounded-full bg-[#b8ef78] shadow-[0_0_10px_rgba(184,239,120,0.8)]" />
+          </div>
+          <div className="space-y-3">
+            {securityEvents.map((event, index) => (
+              <div key={`${event.time}-${index}`} className="flex gap-2 border-b border-slate-800/70 pb-3 last:border-0 last:pb-0">
+                <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${event.kind === 'danger' ? 'bg-rose-400' : event.kind === 'warn' ? 'bg-amber-400' : 'bg-[#b8ef78]'}`} />
+                <div><p className="font-mono text-[9px] text-slate-600">{event.time}</p><p className="mt-0.5 text-[11px] leading-relaxed text-slate-300">{event.message}</p></div>
+              </div>
+            ))}
+          </div>
+        </aside>
       </div>
     </div>
   );

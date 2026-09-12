@@ -13,6 +13,7 @@ interface VerifiablePresentationModalProps {
   dappRequest: DAppVerificationRequest;
   userDid: string;
   userPrivateKey: CryptoKey | null;
+  userPublicKeyJwk: JsonWebKey | null;
   credentials: VerifiableCredential[];
   onVerifyComplete: (presentation: VerifiablePresentation) => Promise<void>;
 }
@@ -23,11 +24,15 @@ export const VerifiablePresentationModal: React.FC<VerifiablePresentationModalPr
   dappRequest,
   userDid,
   userPrivateKey,
+  userPublicKeyJwk,
   credentials,
   onVerifyComplete,
 }) => {
   const [isVerifying, setIsVerifying] = useState(false);
   const [revealedClaimToggles, setRevealedClaimToggles] = useState<Record<string, boolean>>({});
+
+  const credentialForType = (type: string) => credentials.find(cred => cred.type.includes(type));
+  const missingRequirements = dappRequest.requiredCredentials.filter(req => !credentialForType(req.type));
 
   if (!isOpen) return null;
 
@@ -39,18 +44,26 @@ export const VerifiablePresentationModal: React.FC<VerifiablePresentationModalPr
   };
 
   const handleGenerateAndSubmitPresentation = async () => {
-    if (!userPrivateKey) return;
+    if (!userPrivateKey || missingRequirements.length > 0) return;
     setIsVerifying(true);
 
     try {
       // Build selected disclosures
-      const selectedDisclosures = credentials.map(cred => {
-        const zkPredicates = cred.zkDisclosableClaims.map(claim => ({
-          claimKey: claim.claimKey,
-          predicate: claim.label,
-          threshold: claim.value,
-          predicateType: (claim.predicateType || 'gte') as 'gte' | 'eq' | 'in' | 'boolean',
-        }));
+      const selectedDisclosures = dappRequest.requiredCredentials.map(reqCred => {
+        const cred = credentialForType(reqCred.type)!;
+        const zkPredicates = reqCred.requiredPredicates.flatMap(predicate => {
+          const claim = cred.zkDisclosableClaims.find(item => item.claimKey === predicate.claimKey);
+          if (!claim) return [];
+
+          const thresholdMatch = predicate.predicate.match(/>=\s*(\d+(?:\.\d+)?)/);
+          const threshold = thresholdMatch ? Number(thresholdMatch[1]) : claim.predicateType === 'boolean' ? true : claim.value;
+          return [{
+            claimKey: claim.claimKey,
+            predicate: predicate.predicate,
+            threshold,
+            predicateType: (claim.predicateType || 'gte') as 'gte' | 'eq' | 'in' | 'boolean',
+          }];
+        });
 
         // Only reveal raw claims if explicitly toggled by user
         const rawClaimsToReveal: string[] = [];
@@ -71,6 +84,7 @@ export const VerifiablePresentationModal: React.FC<VerifiablePresentationModalPr
         credentials,
         holderDid: userDid,
         privateKey: userPrivateKey,
+        publicKeyJwk: userPublicKeyJwk || {},
         verifierNonce: dappRequest.nonce,
         audience: dappRequest.dappId,
         selectedDisclosures,
@@ -132,10 +146,14 @@ export const VerifiablePresentationModal: React.FC<VerifiablePresentationModalPr
           <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
             {dappRequest.requiredCredentials.map(reqCred => (
               <div key={reqCred.type} className="p-3 rounded-xl bg-slate-950 border border-slate-800/80 space-y-2">
+                {(() => {
+                  const matchingCredential = credentialForType(reqCred.type);
+                  return (
+                    <>
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-white">{reqCred.name}</span>
-                  <span className="text-[10px] text-cyan-400 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800/60 font-mono">
-                    Verifiable Credential
+                  <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${matchingCredential ? 'text-emerald-300 bg-emerald-950 border-emerald-800/60' : 'text-rose-300 bg-rose-950 border-rose-800/60'}`}>
+                    {matchingCredential ? 'Credential available' : 'Credential missing'}
                   </span>
                 </div>
 
@@ -149,12 +167,15 @@ export const VerifiablePresentationModal: React.FC<VerifiablePresentationModalPr
                           <span className="text-[10px] text-slate-500 font-mono">Predicate: {pred.predicate}</span>
                         </div>
                       </div>
-                      <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-950 border border-emerald-800/70 text-emerald-300 font-bold font-mono">
-                        ZK PROOF OK
+                      <span className={`px-2 py-0.5 rounded text-[10px] border font-bold font-mono ${matchingCredential?.zkDisclosableClaims.some(claim => claim.claimKey === pred.claimKey) ? 'bg-emerald-950 border-emerald-800/70 text-emerald-300' : 'bg-rose-950 border-rose-800/70 text-rose-300'}`}>
+                        {matchingCredential?.zkDisclosableClaims.some(claim => claim.claimKey === pred.claimKey) ? 'ZK READY' : 'UNAVAILABLE'}
                       </span>
                     </div>
                   ))}
                 </div>
+                    </>
+                  );
+                })()}
               </div>
             ))}
           </div>
@@ -173,6 +194,9 @@ export const VerifiablePresentationModal: React.FC<VerifiablePresentationModalPr
 
         {/* Action Buttons */}
         <div className="flex items-center justify-end gap-3 pt-2">
+          {missingRequirements.length > 0 && (
+            <span className="mr-auto text-[11px] text-rose-300">Add the missing credential before signing.</span>
+          )}
           <button
             type="button"
             onClick={onClose}
@@ -183,7 +207,7 @@ export const VerifiablePresentationModal: React.FC<VerifiablePresentationModalPr
           <button
             type="button"
             onClick={handleGenerateAndSubmitPresentation}
-            disabled={isVerifying}
+            disabled={isVerifying || missingRequirements.length > 0 || !userPrivateKey}
             className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-bold shadow-lg shadow-cyan-500/25 transition-all cursor-pointer"
           >
             {isVerifying ? (

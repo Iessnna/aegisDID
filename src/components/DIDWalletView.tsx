@@ -94,6 +94,21 @@ export const DIDWalletView: React.FC<DIDWalletViewProps> = ({
 
   return (
     <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[
+          { label: 'Identity status', value: 'Verified', detail: 'ECDSA P-256', tone: 'text-[#b8ef78]' },
+          { label: 'Credentials', value: credentials.length.toString().padStart(2, '0'), detail: 'ZK-enabled', tone: 'text-cyan-300' },
+          { label: 'Privacy mode', value: 'Zero-KYC', detail: 'Raw claims hidden', tone: 'text-amber-300' },
+          { label: 'Key custody', value: 'Browser', detail: 'Self-sovereign', tone: 'text-violet-300' },
+        ].map(stat => (
+          <div key={stat.label} className="aegis-panel rounded-xl p-4">
+            <p className="text-[10px] uppercase tracking-wider text-slate-500">{stat.label}</p>
+            <p className={`aegis-display mt-2 text-lg font-semibold ${stat.tone}`}>{stat.value}</p>
+            <p className="mt-1 text-[11px] text-slate-500">{stat.detail}</p>
+          </div>
+        ))}
+      </div>
+
       {/* Top Banner / Privacy Guarantee */}
       <div className="p-5 rounded-2xl bg-gradient-to-r from-cyan-950/40 via-blue-950/30 to-slate-900 border border-cyan-800/40 shadow-xl">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">

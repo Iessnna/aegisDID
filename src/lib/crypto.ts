@@ -218,6 +218,7 @@ export async function createVerifiablePresentation(params: {
   credentials: VerifiableCredential[];
   holderDid: string;
   privateKey: CryptoKey;
+  publicKeyJwk: JsonWebKey;
   verifierNonce: string;
   audience: string;
   selectedDisclosures: {
@@ -231,7 +232,7 @@ export async function createVerifiablePresentation(params: {
     }[];
   }[];
 }): Promise<VerifiablePresentation> {
-  const { credentials, holderDid, privateKey, verifierNonce, audience, selectedDisclosures } = params;
+  const { credentials, holderDid, privateKey, publicKeyJwk, verifierNonce, audience, selectedDisclosures } = params;
 
   const revealedClaims: Record<string, any> = {};
   const predicateProofs: ZeroKnowledgeProof['predicateProofs'] = [];
@@ -308,6 +309,7 @@ export async function createVerifiablePresentation(params: {
       challenge: verifierNonce,
       domain: audience,
       signatureValue,
+      publicKeyJwk,
     },
   };
 }
@@ -329,6 +331,7 @@ export async function issueVerifiableCredential(params: {
   issuerName: string;
   issuerDid: string;
   issuerPrivateKey: CryptoKey;
+  issuerPublicKey?: CryptoKey;
   issuerTrustScore: number;
   subjectDid: string;
   credentialType: string;
@@ -345,6 +348,7 @@ export async function issueVerifiableCredential(params: {
     issuerName,
     issuerDid,
     issuerPrivateKey,
+    issuerPublicKey,
     issuerTrustScore,
     subjectDid,
     credentialType,
@@ -391,6 +395,7 @@ export async function issueVerifiableCredential(params: {
   });
 
   const signatureValue = await signMessage(payloadToSign, issuerPrivateKey);
+  const publicKeyJwk = issuerPublicKey ? await crypto.subtle.exportKey('jwk', issuerPublicKey) : undefined;
 
   return {
     id: credId,
@@ -413,6 +418,7 @@ export async function issueVerifiableCredential(params: {
       verificationMethod: `${issuerDid}#key-1`,
       proofPurpose: 'assertionMethod',
       signatureValue,
+      publicKeyJwk,
       claimHashes,
     },
   };

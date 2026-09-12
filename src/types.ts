@@ -39,6 +39,7 @@ export interface CredentialProof {
   signatureValue: string;
   nonce?: string;
   claimHashes?: Record<string, string>;
+  publicKeyJwk?: JsonWebKey;
 }
 
 export interface VerifiableCredential {
@@ -91,6 +92,7 @@ export interface VerifiablePresentation {
     challenge: string;
     domain: string;
     signatureValue: string;
+    publicKeyJwk?: JsonWebKey;
   };
 }
 
