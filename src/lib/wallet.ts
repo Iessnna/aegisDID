@@ -21,9 +21,9 @@ export const registryAbi = [
 
 export const mstChain = {
   chainId: import.meta.env.VITE_MST_CHAIN_ID || null,
-  chainName: import.meta.env.VITE_MST_NETWORK_NAME || 'MST Testnet',
+  chainName: import.meta.env.VITE_MST_NETWORK_NAME || '',
   nativeCurrency: { name: 'MST', symbol: 'MST', decimals: 18 },
-  rpcUrls: [import.meta.env.VITE_MST_RPC_URL || 'https://testnetrpc.mstblockchain.com'],
+  rpcUrls: import.meta.env.VITE_MST_RPC_URL ? [import.meta.env.VITE_MST_RPC_URL] : [],
   blockExplorerUrls: import.meta.env.VITE_MST_EXPLORER_URL ? [import.meta.env.VITE_MST_EXPLORER_URL] : [],
 };
 
@@ -31,8 +31,14 @@ export const mstFaucetUrl = import.meta.env.VITE_MST_FAUCET_URL || '';
 export const minimumNativeBalance = import.meta.env.VITE_MST_MIN_NATIVE_BALANCE || '0.001';
 
 export function walletConfigurationError(): string | null {
-  if (!mstChain.chainId) return 'MST wallet configuration is incomplete: VITE_MST_CHAIN_ID is missing.';
-  if (!import.meta.env.VITE_MST_CREDENTIAL_REGISTRY_ADDRESS) return 'MST wallet configuration is incomplete: VITE_MST_CREDENTIAL_REGISTRY_ADDRESS is missing.';
+  const required = [
+    ['VITE_MST_CHAIN_ID', mstChain.chainId],
+    ['VITE_MST_NETWORK_NAME', mstChain.chainName],
+    ['VITE_MST_RPC_URL', import.meta.env.VITE_MST_RPC_URL],
+    ['VITE_MST_EXPLORER_URL', import.meta.env.VITE_MST_EXPLORER_URL],
+    ['VITE_MST_CREDENTIAL_REGISTRY_ADDRESS', import.meta.env.VITE_MST_CREDENTIAL_REGISTRY_ADDRESS],
+  ].find(([, value]) => !value);
+  if (required) return `MST wallet configuration is incomplete: ${required[0]} is missing. Add it to the build environment and redeploy.`;
   return null;
 }
 

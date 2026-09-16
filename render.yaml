@@ -26,6 +26,16 @@ services:
         sync: false
       - key: MST_CREDENTIAL_REGISTRY_ADDRESS
         sync: false
+      - key: VITE_MST_CHAIN_ID
+        value: "0x5752035"
+      - key: VITE_MST_NETWORK_NAME
+        value: MST Testnet
+      - key: VITE_MST_RPC_URL
+        value: https://testnetrpc.mstblockchain.com
+      - key: VITE_MST_EXPLORER_URL
+        value: https://testnet.mstscan.com
+      - key: VITE_MST_CREDENTIAL_REGISTRY_ADDRESS
+        value: "0x8ea34e36670557A552c25F37A81b895Ca0535F6c"
       - key: DATABASE_PATH
         value: /opt/render/project/src/data/aegisdid.db
       - key: ADMIN_EMAIL

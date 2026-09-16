@@ -6,6 +6,8 @@ Base URL: `http://localhost:3000`
 
 Server-side records use SQLite through Drizzle ORM. Set `DATABASE_PATH` to override the default `./data/aegisdid.db`. Apply tracked migrations with `npm run db:migrate`; this also imports legacy `data/auth.json` records once and skips existing IDs on repeat runs. Seed the first administrator once with `ADMIN_EMAIL` and `ADMIN_PASSWORD` using `npm run db:seed`.
 
+Vite client variables are baked into the browser bundle during `npm run build`. Every new `VITE_*` variable must be added to both `.env.example` for local development and `render.yaml` as a plain `value:` entry for production. Updating Render variables requires a fresh deploy; changing them at runtime cannot change an already-built bundle.
+
 Protected AI routes accept either the HttpOnly `aegis_session` cookie created by login or an API key header:
 
 ```http

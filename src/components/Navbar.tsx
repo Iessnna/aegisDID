@@ -1,5 +1,6 @@
 import React from 'react';
 import { Shield, Fingerprint, Network, Cpu, FlaskConical, Wallet, Bell, Copy, Check, Menu, X, ExternalLink, LogOut } from 'lucide-react';
+import { mstChain } from '../lib/wallet';
 
 interface NavbarProps {
   activeTab: 'wallet' | 'behavioral' | 'network' | 'dapps' | 'lab' | 'transactions' | 'notifications' | 'admin';
@@ -173,4 +174,4 @@ export const Navbar: React.FC<NavbarProps> = ({
   );
 };
 
-function mstChainName() { return import.meta.env.VITE_MST_NETWORK_NAME || 'MST Testnet'; }
+function mstChainName() { return mstChain.chainName; }
