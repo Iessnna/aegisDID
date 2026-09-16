@@ -2,13 +2,16 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
-import { GoogleGenAI } from '@google/genai';
+import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import compression from 'compression';
 import { createClient, type RedisClientType } from 'redis';
 import { webcrypto, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
-import { promises as fs } from 'node:fs';
 import { promisify } from 'node:util';
 import { mstAnchor } from './src/lib/mstAnchor';
+import { JsonRpcProvider, getAddress, isAddress } from 'ethers';
+import { and, count, desc, eq, isNull, lt, or } from 'drizzle-orm';
+import { db } from './src/db';
+import { adminAuditLog, apiKeys, credentials, fraudFlags, notifications, sessions, spentChallenges, transactions, users } from './src/db/schema';
 
 dotenv.config();
 
@@ -21,7 +24,6 @@ app.set('trust proxy', 1);
 const PORT = Number(process.env.PORT || 3000);
 const serverCrypto = webcrypto;
 const scrypt = promisify(scryptCallback);
-const authStorePath = path.join(process.cwd(), 'data', 'auth.json');
 const sessionDurationMs = 7 * 24 * 60 * 60 * 1000;
 const redisClient: RedisClientType = createClient({
   url: process.env.REDIS_URL || 'redis://localhost:6379',
@@ -48,43 +50,27 @@ interface AuthUserRecord {
   passwordHash: string;
   createdAt: string;
   apiKeys: ApiKeyRecord[];
+  role: 'user' | 'admin';
+  walletAddress: string | null;
+  did: string | null;
+  status: 'active' | 'revoked';
+  credentialCount?: number;
 }
 
-interface AuthSessionRecord {
-  userId: string;
-  expiresAt: number;
+function mapUser(row: typeof users.$inferSelect, keyRows: ApiKeyRecord[] = [], credentialCount = 0): AuthUserRecord {
+  return { id: row.id, email: row.email, passwordSalt: row.passwordSalt, passwordHash: row.passwordHash, createdAt: row.createdAt, apiKeys: keyRows, role: row.role, walletAddress: row.walletAddress, did: row.did, status: row.revoked ? 'revoked' : 'active', credentialCount };
 }
 
-interface AuthStore {
-  users: AuthUserRecord[];
-  sessions: Record<string, AuthSessionRecord>;
-  spentChallenges?: Record<string, number>;
+async function findUserById(id: string): Promise<AuthUserRecord | null> {
+  const row = db.select().from(users).where(eq(users.id, id)).get();
+  if (!row) return null;
+  const keys = db.select({ id: apiKeys.id, name: apiKeys.name, hash: apiKeys.keyHash, createdAt: apiKeys.createdAt, lastUsedAt: apiKeys.lastUsedAt }).from(apiKeys).where(eq(apiKeys.userId, id)).all();
+  return mapUser(row, keys);
 }
 
-let authStore: AuthStore | null = null;
-let authSaveQueue: Promise<void> = Promise.resolve();
-
-async function getAuthStore(): Promise<AuthStore> {
-  if (authStore) return authStore;
-  try {
-    authStore = JSON.parse(await fs.readFile(authStorePath, 'utf8')) as AuthStore;
-  } catch {
-    authStore = { users: [], sessions: {}, spentChallenges: {} };
-  }
-  if (!authStore.spentChallenges) authStore.spentChallenges = {};
-  return authStore;
-}
-
-async function saveAuthStore(): Promise<void> {
-  if (!authStore) return;
-  const snapshot = JSON.stringify(authStore, null, 2);
-  authSaveQueue = authSaveQueue.then(async () => {
-    await fs.mkdir(path.dirname(authStorePath), { recursive: true });
-    const temporaryPath = `${authStorePath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
-    await fs.writeFile(temporaryPath, snapshot, 'utf8');
-    await fs.rename(temporaryPath, authStorePath);
-  });
-  await authSaveQueue;
+async function findUserByEmail(email: string): Promise<AuthUserRecord | null> {
+  const row = db.select().from(users).where(eq(users.email, email)).get();
+  return row ? mapUser(row, db.select({ id: apiKeys.id, name: apiKeys.name, hash: apiKeys.keyHash, createdAt: apiKeys.createdAt, lastUsedAt: apiKeys.lastUsedAt }).from(apiKeys).where(eq(apiKeys.userId, row.id)).all()) : null;
 }
 
 async function hashPassword(password: string, salt: Buffer): Promise<Buffer> {
@@ -120,17 +106,16 @@ function readSessionToken(req: Request): string | null {
 }
 
 async function getAuthenticatedUser(req: Request): Promise<AuthUserRecord | null> {
-  const store = await getAuthStore();
   const token = readSessionToken(req);
   if (!token) return null;
   const tokenHash = await hashApiKey(token);
-  const session = store.sessions[tokenHash];
+  const session = db.select().from(sessions).where(eq(sessions.tokenHash, tokenHash)).get();
   if (!session || session.expiresAt <= Date.now()) {
-    if (session) delete store.sessions[tokenHash];
-    await saveAuthStore();
+    if (session) db.delete(sessions).where(eq(sessions.tokenHash, tokenHash)).run();
     return null;
   }
-  return store.users.find(user => user.id === session.userId) || null;
+  const user = await findUserById(session.userId);
+  return user?.status === 'revoked' ? null : user;
 }
 
 function setSessionCookie(res: Response, token: string): void {
@@ -144,11 +129,32 @@ async function requireAuthenticatedUser(req: Request, res: Response): Promise<Au
   return user;
 }
 
+async function requireAdmin(req: Request, res: Response): Promise<AuthUserRecord | null> {
+  const user = await requireAuthenticatedUser(req, res);
+  if (!user) return null;
+  if (user.role !== 'admin') { res.status(403).json({ error: 'Administrator access required' }); return null; }
+  return user;
+}
+
+function publicUser(user: AuthUserRecord) {
+  return { id: user.id, email: user.email, role: user.role || 'user', walletAddress: user.walletAddress || null, did: user.did || null, status: user.status || 'active' };
+}
+
+function createNotification(userId: string | null, type: 'info' | 'error' | 'admin', title: string, message: string): void {
+  db.insert(notifications).values({ id: `notice_${randomBytes(10).toString('hex')}`, userId, type, title: title.slice(0, 120), message: message.slice(0, 1000), createdAt: new Date().toISOString(), readAt: null }).run();
+}
+
+function normalizeTransactionType(type: string): 'did_registration' | 'credential_anchor' | 'audit_log' | 'sybil_publish' | null {
+  if (type === 'DID registration' || type === 'did_registration') return 'did_registration';
+  if (type === 'Credential anchor' || type === 'credential_anchor') return 'credential_anchor';
+  if (type === 'Audit log' || type === 'audit_log') return 'audit_log';
+  if (type === 'Sybil publish' || type === 'sybil_publish') return 'sybil_publish';
+  return null;
+}
+
 async function createSession(userId: string, res: Response): Promise<void> {
-  const store = await getAuthStore();
   const token = randomBytes(32).toString('base64url');
-  store.sessions[await hashApiKey(token)] = { userId, expiresAt: Date.now() + sessionDurationMs };
-  await saveAuthStore();
+  db.insert(sessions).values({ tokenHash: await hashApiKey(token), userId, expiresAt: Date.now() + sessionDurationMs }).run();
   setSessionCookie(res, token);
 }
 
@@ -162,10 +168,10 @@ app.use((error: any, req: Request, res: Response, next: express.NextFunction) =>
   return next(error);
 });
 
-// Lazy Google GenAI Client
-let genAIClient: GoogleGenAI | null = null;
-const geminiResponseCache = new Map<string, { value: string; expiresAt: number }>();
+// Lazy LangChain model creation keeps the provider key server-side.
+const langChainResponseCache = new Map<string, { value: string; expiresAt: number }>();
 const requestWindows = new Map<string, { startedAt: number; count: number }>();
+const telemetryChallenges = new Map<string, { ip: string; expiresAt: number }>();
 const maxAiRequestsPerMinute = 30;
 const maxLoginAttemptsPerWindow = 5;
 const loginWindowMs = 15 * 60 * 1000;
@@ -186,6 +192,16 @@ function consumeRateLimit(key: string, limit: number, windowMs: number): boolean
   return true;
 }
 
+function validateTelemetry(telemetry: any): string | null {
+  if (!telemetry || !Number.isInteger(telemetry.eventsCount) || telemetry.eventsCount < 0) return 'Telemetry eventsCount is invalid';
+  if (!Number.isFinite(telemetry.interactionDurationMs) || telemetry.interactionDurationMs < 0 || telemetry.interactionDurationMs > 24 * 60 * 60 * 1000) return 'Telemetry interaction duration is invalid';
+  const keystrokeCount = Array.isArray(telemetry.keystrokes) ? telemetry.keystrokes.length : 0;
+  const mousePointCount = Array.isArray(telemetry.mousePoints) ? telemetry.mousePoints.length : 0;
+  if (keystrokeCount + mousePointCount > telemetry.eventsCount) return 'Telemetry event count is inconsistent with captured samples';
+  if (telemetry.eventsCount > 0 && telemetry.interactionDurationMs === 0) return 'Telemetry duration is inconsistent with captured events';
+  return null;
+}
+
 function getBearerToken(req: Request): string | null {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) return null;
@@ -197,16 +213,11 @@ async function getApiKeyUser(req: Request): Promise<{ user: AuthUserRecord; rate
   const token = getBearerToken(req);
   if (!token) return null;
   const tokenHash = await hashApiKey(token);
-  const store = await getAuthStore();
-  for (const user of store.users) {
-    const key = user.apiKeys.find(candidate => candidate.hash === tokenHash);
-    if (key) {
-      key.lastUsedAt = new Date().toISOString();
-      await saveAuthStore();
-      return { user, rateKey: `api:${key.id}` };
-    }
-  }
-  return null;
+  const key = db.select().from(apiKeys).where(eq(apiKeys.keyHash, tokenHash)).get();
+  if (!key) return null;
+  db.update(apiKeys).set({ lastUsedAt: new Date().toISOString() }).where(eq(apiKeys.id, key.id)).run();
+  const user = await findUserById(key.userId);
+  return user && user.status === 'active' ? { user, rateKey: `api:${key.id}` } : null;
 }
 
 async function requireAiAccess(req: Request, res: Response): Promise<string | null> {
@@ -261,13 +272,21 @@ async function verifyCredential(credential: any, expectedSubjectDid?: string): P
   if (!publicKeyJwk || !credential?.proof?.signatureValue || !credential?.proof?.claimHashes) return false;
   if (!credential?.issuer?.id || credential.proof.verificationMethod !== `${credential.issuer.id}#key-1`) return false;
   if (expectedSubjectDid && credential?.credentialSubject?.id !== expectedSubjectDid) return false;
-  const claims = { ...credential.credentialSubject };
-  delete claims.id;
   const expectedClaimHashes = credential.proof.claimHashes as Record<string, string>;
   for (const claim of credential.zkDisclosableClaims || []) {
-    const normalizedValue = typeof claim.value === 'object' ? JSON.stringify(claim.value) : String(claim.value);
-    const expectedCommitment = await sha256(`${claim.claimKey}:${normalizedValue}:${claim.salt}`);
-    if (expectedCommitment !== claim.commitmentHash || expectedClaimHashes[claim.claimKey] !== claim.commitmentHash) return false;
+    if (claim.value !== undefined) {
+      const normalizedValue = typeof claim.value === 'object' ? JSON.stringify(claim.value) : String(claim.value);
+      const expectedCommitment = await sha256(`${claim.claimKey}:${normalizedValue}:${claim.salt}`);
+      if (expectedCommitment !== claim.commitmentHash) return false;
+    }
+    if (expectedClaimHashes[claim.claimKey] !== claim.commitmentHash) return false;
+  }
+  const claimsSummaryHash = credential.proof.claimsSummaryHash;
+  if (!claimsSummaryHash) return false;
+  const predicateAttestations = credential.proof.predicateAttestations || [];
+  for (const attestation of predicateAttestations) {
+    const attestationPayload = `${credential.id}:${attestation.claimKey}:${attestation.predicate}:${attestation.satisfied ? 'PASS' : 'FAIL'}`;
+    if (!(await verifyEcdsa(attestationPayload, attestation.signatureValue, publicKeyJwk))) return false;
   }
   const payload = JSON.stringify({
     id: credential.id,
@@ -276,8 +295,9 @@ async function verifyCredential(credential: any, expectedSubjectDid?: string): P
     type: credential.type,
     issuanceDate: credential.issuanceDate,
     expirationDate: credential.expirationDate,
-    claimsSummaryHash: await sha256(JSON.stringify(claims)),
+    claimsSummaryHash,
     claimHashes: expectedClaimHashes,
+    predicateAttestations,
   });
   if (!credential.expirationDate || Date.parse(credential.expirationDate) <= Date.now()) return false;
   return verifyEcdsa(payload, credential.proof.signatureValue, publicKeyJwk);
@@ -292,9 +312,13 @@ async function verifyPresentation(presentation: any): Promise<boolean> {
     const credentialClaim = (presentation.verifiableCredential || [])
       .flatMap((credential: any) => credential.zkDisclosableClaims || [])
       .find((claim: any) => claim.claimKey === predicateProof.claimKey && claim.commitmentHash === predicateProof.commitmentHash);
-    if (!credentialClaim || predicateProof.satisfied !== true) return false;
-    const witnessHash = await sha256(`${credentialClaim.salt}:${credentialClaim.value}:${predicateProof.predicate}:PASS`);
-    if (`zkp:pedersen_sha256:${witnessHash.substring(0, 48)}` !== predicateProof.zkWitnessProof) return false;
+    if (!credentialClaim || predicateProof.satisfied !== true || credentialClaim.value !== undefined) return false;
+    const attestation = credentialClaim && presentation.verifiableCredential
+      .flatMap((credential: any) => credential.proof?.predicateAttestations || [])
+      .find((candidate: any) => candidate.claimKey === predicateProof.claimKey && candidate.predicate === predicateProof.predicate && candidate.satisfied === true);
+    if (!attestation || JSON.stringify(attestation) !== JSON.stringify(predicateProof.issuerAttestation)) return false;
+    // Long-term replacement: use a real ZK range-proof system (e.g. circom/snarkjs or a Pedersen range proof).
+    // The current issuer-signed predicate attestation is the pragmatic privacy-preserving interim model.
   }
   const presentationPayload = JSON.stringify({
     id: presentation.id,
@@ -319,44 +343,52 @@ async function queueMstIdentityAnchors(presentation: any): Promise<void> {
     console.warn('Optional MST identity anchoring failed:', error?.message || error);
   }
 }
-function getGenAI(): GoogleGenAI | null {
-  if (!genAIClient && process.env.GEMINI_API_KEY) {
-    genAIClient = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-  }
-  return genAIClient;
-}
 
-// Resilient AI generation with fallback across models to handle 503 high-demand spikes
-async function generateWithGeminiFallback(prompt: string): Promise<string | null> {
-  const ai = getGenAI();
-  if (!ai) return null;
+const publicVerificationCors = (_req: Request, res: Response, next: express.NextFunction) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  next();
+};
 
+app.get('/verify-request', (req: Request, res: Response, next: express.NextFunction) => {
+  const origin = typeof req.query.origin === 'string' ? req.query.origin.slice(0, 300) : getClientIp(req);
+  if (!consumeRateLimit(`verify-popup:${origin}`, 20, 60_000)) return res.status(429).send('Verification request rate limit exceeded');
+  void getAuthenticatedUser(req).then(user => {
+    if (user) createNotification(user.id, 'info', 'External credential request', `${origin} opened an AegisDID verification request. Review the requested predicates before approving.`);
+  });
+  next();
+});
+// Resilient LangChain generation with fallback across models to handle provider overloads.
+async function generateWithLangChainFallback(prompt: string): Promise<string | null> {
   const promptHash = await sha256(prompt);
-  const cached = geminiResponseCache.get(promptHash);
+  const cached = langChainResponseCache.get(promptHash);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
-  if (cached) geminiResponseCache.delete(promptHash);
+  if (cached) langChainResponseCache.delete(promptHash);
 
   const candidateModels = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.7-flash'];
 
   for (const model of candidateModels) {
     try {
-      const response = await ai.models.generateContent({
+      if (!process.env.GEMINI_API_KEY) return null;
+      const chatModel = new ChatGoogleGenerativeAI({
+        apiKey: process.env.GEMINI_API_KEY,
         model,
-        contents: prompt,
+        maxRetries: 0,
       });
-      if (response.text && response.text.trim().length > 0) {
-        const value = response.text.trim();
-        geminiResponseCache.set(promptHash, { value, expiresAt: Date.now() + 5 * 60 * 1000 });
-        if (geminiResponseCache.size > 100) {
-          const oldestKey = geminiResponseCache.keys().next().value;
-          if (oldestKey) geminiResponseCache.delete(oldestKey);
+      const response = await chatModel.invoke(prompt);
+      const value = typeof response.content === 'string'
+        ? response.content.trim()
+        : response.content
+          .filter((block): block is { type: 'text'; text: string } => typeof block === 'object' && block !== null && block.type === 'text')
+          .map(block => block.text)
+          .join('\n')
+          .trim();
+      if (value.length > 0) {
+        langChainResponseCache.set(promptHash, { value, expiresAt: Date.now() + 5 * 60 * 1000 });
+        if (langChainResponseCache.size > 100) {
+          const oldestKey = langChainResponseCache.keys().next().value;
+          if (oldestKey) langChainResponseCache.delete(oldestKey);
         }
         return value;
       }
@@ -378,12 +410,33 @@ async function generateWithGeminiFallback(prompt: string): Promise<string | null
 app.get('/api/health', (req: Request, res: Response) => {
   res.json({
     status: 'ok',
-    geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+    aiConfigured: Boolean(process.env.GEMINI_API_KEY),
     redisConfigured: redisReady,
     mstIntegration: mstAnchor.status,
     timestamp: new Date().toISOString(),
     system: 'AegisDID Decentralized Identity & AI Fraud Shield',
   });
+});
+
+app.get('/api/ai/telemetry-challenge', async (req: Request, res: Response) => {
+  const token = randomBytes(24).toString('base64url');
+  telemetryChallenges.set(token, { ip: getClientIp(req), expiresAt: Date.now() + 2 * 60 * 1000 });
+  for (const [candidate, challenge] of telemetryChallenges) if (challenge.expiresAt <= Date.now()) telemetryChallenges.delete(candidate);
+  res.json({ challenge: token, expiresAt: new Date(Date.now() + 2 * 60 * 1000).toISOString() });
+});
+
+app.options('/api/public/verify-presentation', publicVerificationCors);
+app.post('/api/public/verify-presentation', publicVerificationCors, async (req: Request, res: Response) => {
+  const rateKey = `public-verify:${getClientIp(req)}`;
+  if (!consumeRateLimit(rateKey, 30, 60_000)) return res.status(429).json({ error: 'Public verification rate limit exceeded' });
+  const presentation = req.body;
+  if (!presentation || typeof presentation !== 'object' || !presentation.holder) return res.status(400).json({ valid: false, error: 'A VerifiablePresentation JSON body is required' });
+  try {
+    const valid = await verifyPresentation(presentation);
+    res.json({ valid, holderDid: presentation.holder, revealedClaims: valid ? presentation.zkProofs?.revealedClaims || {} : {}, checkedAt: new Date().toISOString() });
+  } catch (error: any) {
+    res.status(400).json({ valid: false, holderDid: presentation.holder, revealedClaims: {}, checkedAt: new Date().toISOString(), error: error?.message || 'Presentation verification failed' });
+  }
 });
 
 // Account registration and session authentication. Passwords and session tokens are never stored raw.
@@ -394,8 +447,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address' });
     if (password.length < 10) return res.status(400).json({ error: 'Password must be at least 10 characters' });
 
-    const store = await getAuthStore();
-    if (store.users.some(user => user.email === email)) return res.status(409).json({ error: 'An account already exists for this email' });
+    if (db.select({ id: users.id }).from(users).where(eq(users.email, email)).get()) return res.status(409).json({ error: 'An account already exists for this email' });
     const salt = randomBytes(16);
     const user: AuthUserRecord = {
       id: `user_${randomBytes(12).toString('hex')}`,
@@ -404,10 +456,15 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       passwordHash: (await hashPassword(password, salt)).toString('base64'),
       createdAt: new Date().toISOString(),
       apiKeys: [],
+      role: 'user',
+      walletAddress: null,
+      did: null,
+      status: 'active',
+      credentialCount: 0,
     };
-    store.users.push(user);
+    db.insert(users).values({ id: user.id, email: user.email, passwordSalt: user.passwordSalt, passwordHash: user.passwordHash, role: 'user', createdAt: user.createdAt, revoked: false }).run();
     await createSession(user.id, res);
-    res.status(201).json({ user: { id: user.id, email: user.email }, apiKeys: [] });
+    res.status(201).json({ user: publicUser(user), apiKeys: [] });
   } catch (error) {
     console.error('Registration error:', error);
     res.status(500).json({ error: 'Unable to create account' });
@@ -422,14 +479,14 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     if (!consumeRateLimit(loginRateKey, maxLoginAttemptsPerWindow, loginWindowMs)) {
       return res.status(429).json({ error: 'Too many login attempts. Try again in 15 minutes.' });
     }
-    const store = await getAuthStore();
-    const user = store.users.find(candidate => candidate.email === email);
+    const user = await findUserByEmail(email);
     if (!user) return res.status(401).json({ error: 'Invalid email or password' });
     const actual = await hashPassword(password, Buffer.from(user.passwordSalt, 'base64'));
     const expected = Buffer.from(user.passwordHash, 'base64');
     if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return res.status(401).json({ error: 'Invalid email or password' });
+    if (user.status === 'revoked') return res.status(403).json({ error: 'This account has been revoked' });
     await createSession(user.id, res);
-    res.json({ user: { id: user.id, email: user.email }, apiKeys: user.apiKeys.map(({ hash, ...metadata }) => metadata) });
+    res.json({ user: publicUser(user), apiKeys: user.apiKeys.map(({ hash, ...metadata }) => metadata) });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Unable to sign in' });
@@ -437,10 +494,8 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 });
 
 app.post('/api/auth/logout', async (req: Request, res: Response) => {
-  const store = await getAuthStore();
   const token = readSessionToken(req);
-  if (token) delete store.sessions[await hashApiKey(token)];
-  await saveAuthStore();
+  if (token) db.delete(sessions).where(eq(sessions.tokenHash, await hashApiKey(token))).run();
   res.setHeader('Set-Cookie', 'aegis_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0');
   res.status(204).send();
 });
@@ -448,11 +503,127 @@ app.post('/api/auth/logout', async (req: Request, res: Response) => {
 app.get('/api/auth/me', async (req: Request, res: Response) => {
   const user = await getAuthenticatedUser(req);
   if (!user) return res.json({ authenticated: false });
-  res.json({ authenticated: true, user: { id: user.id, email: user.email }, apiKeys: user.apiKeys.map(({ hash, ...metadata }) => metadata) });
+  res.json({ authenticated: true, user: publicUser(user), apiKeys: user.apiKeys.map(({ hash, ...metadata }) => metadata) });
+});
+
+app.get('/api/notifications', async (req: Request, res: Response) => {
+  const user = await requireAuthenticatedUser(req, res);
+  if (!user) return;
+  const rows = db.select().from(notifications).where(or(eq(notifications.userId, user.id), isNull(notifications.userId))).orderBy(desc(notifications.createdAt)).limit(100).all();
+  res.json({ notifications: rows, unreadCount: rows.filter(notification => !notification.readAt).length });
+});
+
+app.patch('/api/notifications/:notificationId/read', async (req: Request, res: Response) => {
+  const user = await requireAuthenticatedUser(req, res);
+  if (!user) return;
+  const updated = db.update(notifications).set({ readAt: new Date().toISOString() }).where(and(eq(notifications.id, req.params.notificationId), or(eq(notifications.userId, user.id), isNull(notifications.userId)))).run();
+  if (updated.changes === 0) return res.status(404).json({ error: 'Notification not found' });
+  res.status(204).send();
+});
+
+app.post('/api/auth/wallet', async (req: Request, res: Response) => {
+  const user = await requireAuthenticatedUser(req, res);
+  if (!user) return;
+  const address = String(req.body?.address || '');
+  const did = typeof req.body?.did === 'string' ? req.body.did.slice(0, 300) : undefined;
+  if (!isAddress(address)) return res.status(400).json({ error: 'A valid wallet address is required' });
+  const normalizedAddress = getAddress(address);
+  const owner = db.select({ id: users.id }).from(users).where(eq(users.walletAddress, normalizedAddress)).all().find(candidate => candidate.id !== user.id);
+  if (owner) return res.status(409).json({ error: 'That wallet is already linked to another account' });
+  db.update(users).set({ walletAddress: normalizedAddress, did: did || user.did }).where(eq(users.id, user.id)).run();
+  res.json({ user: publicUser((await findUserById(user.id))!) });
 });
 
 app.get('/api/blockchain/status', (req: Request, res: Response) => {
   res.json(mstAnchor.status);
+});
+
+app.post('/api/transactions', async (req: Request, res: Response) => {
+  const user = await requireAuthenticatedUser(req, res);
+  if (!user) return;
+  const txHash = String(req.body?.txHash || '');
+  const type = normalizeTransactionType(String(req.body?.type || '').slice(0, 80));
+  if (!user.walletAddress || !/^0x[a-fA-F0-9]{64}$/.test(txHash) || !type) return res.status(400).json({ error: 'Wallet binding, transaction hash, and valid transaction type are required' });
+  if (!consumeRateLimit(`tx:${user.id}`, 30, 60_000)) return res.status(429).json({ error: 'Transaction verification rate limit exceeded' });
+  const provider = process.env.MST_RPC_URL ? new JsonRpcProvider(process.env.MST_RPC_URL) : null;
+  if (!provider) return res.status(503).json({ error: 'MST RPC is not configured' });
+  try {
+    const [transaction, receipt] = await Promise.all([provider.getTransaction(txHash), provider.getTransactionReceipt(txHash)]);
+    if (!transaction || !receipt) return res.status(400).json({ error: 'Transaction is not confirmed on the MST chain' });
+    if (transaction.from.toLowerCase() !== user.walletAddress.toLowerCase()) return res.status(403).json({ error: 'Transaction signer does not match the linked wallet' });
+    if (mstAnchor.status.registryAddress && transaction.to?.toLowerCase() !== mstAnchor.status.registryAddress.toLowerCase()) return res.status(400).json({ error: 'Transaction target is not the Aegis registry' });
+    const createdAt = new Date().toISOString();
+    const status = receipt.status === 1 ? 'confirmed' : 'failed';
+    db.insert(transactions).values({ id: `tx_${randomBytes(10).toString('hex')}`, userId: user.id, walletAddress: user.walletAddress, type, txHash, status, chainId: process.env.MST_CHAIN_ID || 'unknown', createdAt, confirmedAt: status === 'confirmed' ? createdAt : null, errorMessage: status === 'confirmed' ? null : 'Transaction reverted on-chain' }).run();
+    res.status(201).json({ transaction: { type, txHash, timestamp: createdAt, status, error: status === 'confirmed' ? undefined : 'Transaction reverted on-chain' } });
+  } catch (error: any) { res.status(400).json({ error: error?.shortMessage || error?.message || 'Unable to verify transaction' }); }
+});
+
+app.get('/api/transactions', async (req: Request, res: Response) => {
+  const user = await requireAuthenticatedUser(req, res);
+  if (!user) return;
+  const requestedUserId = typeof req.query.userId === 'string' ? req.query.userId : user.id;
+  if (requestedUserId !== user.id && user.role !== 'admin') return res.status(403).json({ error: 'Users can only view their own transactions' });
+  const rows = db.select().from(transactions).where(eq(transactions.userId, requestedUserId)).orderBy(desc(transactions.createdAt)).all();
+  res.json({ transactions: rows.map(transaction => ({ id: transaction.id, type: transaction.type, txHash: transaction.txHash, walletAddress: transaction.walletAddress, timestamp: transaction.createdAt, status: transaction.status, gasUsed: undefined, error: transaction.errorMessage || undefined })) });
+});
+
+app.get('/api/admin/users', async (req: Request, res: Response) => {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  const rows = db.select().from(users).all();
+  res.json({ users: rows.map(user => ({ ...publicUser(mapUser(user)), createdAt: user.createdAt, credentialCount: db.select({ value: count() }).from(credentials).where(eq(credentials.userId, user.id)).get()?.value || 0 })) });
+});
+
+app.get('/api/admin/users/:userId/credentials', async (req: Request, res: Response) => {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  res.json({ credentials: db.select().from(credentials).where(eq(credentials.userId, req.params.userId)).orderBy(desc(credentials.issuedAt)).all() });
+});
+
+app.get('/api/admin/audit-log', async (req: Request, res: Response) => {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  res.json({ auditLog: db.select().from(adminAuditLog).orderBy(desc(adminAuditLog.createdAt)).all() });
+});
+
+app.get('/api/admin/fraud-flags', async (req: Request, res: Response) => {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  res.json({ flags: db.select().from(fraudFlags).orderBy(desc(fraudFlags.createdAt)).all().map(flag => ({ id: flag.id, userId: flag.userId, decision: flag.decision, timestamp: flag.createdAt, analysis: JSON.parse(flag.analysis) })) });
+});
+
+app.post('/api/admin/notifications', async (req: Request, res: Response) => {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  if (!consumeRateLimit(`admin-notification:${admin.id}`, 20, 60_000)) return res.status(429).json({ error: 'Admin notification rate limit exceeded' });
+  const title = String(req.body?.title || '').trim();
+  const message = String(req.body?.message || '').trim();
+  const userId = req.body?.userId ? String(req.body.userId) : null;
+  if (!title || !message || title.length > 120 || message.length > 1000) return res.status(400).json({ error: 'Title and message are required and must be within limits' });
+  if (userId && !db.select({ id: users.id }).from(users).where(eq(users.id, userId)).get()) return res.status(404).json({ error: 'Target user not found' });
+  createNotification(userId, 'admin', title, message);
+  res.status(201).json({ sent: true, audience: userId || 'all users' });
+});
+
+app.post('/api/admin/users/:userId/revoke', async (req: Request, res: Response) => {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  if (!consumeRateLimit(`admin-revoke:${admin.id}`, 10, 60_000)) return res.status(429).json({ error: 'Admin action rate limit exceeded' });
+  const targetRow = db.select().from(users).where(eq(users.id, req.params.userId)).get();
+  if (!targetRow) return res.status(404).json({ error: 'User not found' });
+  const target = mapUser(targetRow);
+  if (target.id === admin.id) return res.status(400).json({ error: 'Administrators cannot revoke their own account' });
+  const revokedAt = new Date().toISOString();
+  db.update(users).set({ revoked: true, revokedAt }).where(eq(users.id, target.id)).run();
+  db.delete(sessions).where(eq(sessions.userId, target.id)).run();
+  let onChainRevocation = 'not_attempted: user has no stored DID';
+  if (target.did && mstAnchor.status.configured) {
+    try { onChainRevocation = await mstAnchor.revokeDID(target.did) ? 'confirmed' : 'failed: server signer is not authorized'; }
+    catch (error: any) { onChainRevocation = `failed: ${error?.shortMessage || error?.message || 'registry revoke failed'}`; }
+  } else if (target.did) onChainRevocation = 'not_attempted: MST registry is not configured';
+  db.insert(adminAuditLog).values({ id: `admin_audit_${randomBytes(8).toString('hex')}`, adminUserId: admin.id, action: 'revoke_user', targetUserId: target.id, details: JSON.stringify({ onChainRevocation }), createdAt: revokedAt }).run();
+  res.json({ revoked: true, onChainRevocation });
 });
 
 // Raw API keys are returned once at creation and only their metadata is persisted afterward.
@@ -467,18 +638,15 @@ app.post('/api/auth/api-keys', async (req: Request, res: Response) => {
     hash: await hashApiKey(rawKey),
     createdAt: new Date().toISOString(),
   };
-  user.apiKeys.push(key);
-  await saveAuthStore();
+  db.insert(apiKeys).values({ id: key.id, userId: user.id, name: key.name, keyHash: key.hash, createdAt: key.createdAt }).run();
   res.status(201).json({ apiKey: rawKey, metadata: { id: key.id, name: key.name, createdAt: key.createdAt } });
 });
 
 app.delete('/api/auth/api-keys/:keyId', async (req: Request, res: Response) => {
   const user = await requireAuthenticatedUser(req, res);
   if (!user) return;
-  const previousLength = user.apiKeys.length;
-  user.apiKeys = user.apiKeys.filter(key => key.id !== req.params.keyId);
-  if (user.apiKeys.length === previousLength) return res.status(404).json({ error: 'API key not found' });
-  await saveAuthStore();
+  const deleted = db.delete(apiKeys).where(and(eq(apiKeys.id, req.params.keyId), eq(apiKeys.userId, user.id))).run();
+  if (deleted.changes === 0) return res.status(404).json({ error: 'API key not found' });
   res.status(204).send();
 });
 
@@ -486,7 +654,12 @@ app.delete('/api/auth/api-keys/:keyId', async (req: Request, res: Response) => {
 app.post('/api/ai/analyze-behavior-and-fraud', async (req: Request, res: Response) => {
   try {
     if (!(await requireAiAccess(req, res))) return;
-    const { telemetry, presentation, networkContext, simulationAttackType } = req.body;
+    const { telemetry, telemetryChallenge, presentation, networkContext, simulationAttackType } = req.body;
+    const challenge = telemetryChallenges.get(String(telemetryChallenge || ''));
+    if (!challenge || challenge.ip !== getClientIp(req) || challenge.expiresAt <= Date.now()) return res.status(400).json({ error: 'A fresh telemetry challenge is required' });
+    telemetryChallenges.delete(String(telemetryChallenge));
+    const telemetryError = validateTelemetry(telemetry);
+    if (telemetryError) return res.status(400).json({ error: telemetryError });
 
     if (presentation?.proof) {
       const challenge = presentation.proof.challenge;
@@ -494,28 +667,23 @@ app.post('/api/ai/analyze-behavior-and-fraud', async (req: Request, res: Respons
       const predicateProofs = presentation.zkProofs?.predicateProofs || [];
       const challengeKey = `${audience}:${challenge}`;
       const challengeAge = Date.now() - new Date(presentation.proof.created || 0).getTime();
-      const store = await getAuthStore();
-      const spentChallenges = store.spentChallenges || (store.spentChallenges = {});
+      const spentChallenge = db.select().from(spentChallenges).where(eq(spentChallenges.challengeKey, challengeKey)).get();
 
       if (!presentation.holder || !audience || !challenge || challenge !== presentation.presentationNonce || audience !== presentation.proof.domain) {
         return res.status(400).json({ error: 'Invalid presentation challenge binding' });
       }
       if (!(await verifyPresentation(presentation))) return res.status(400).json({ error: 'Credential or presentation signature verification failed' });
-      void queueMstIdentityAnchors(presentation);
+      const sessionUser = await getAuthenticatedUser(req);
+      if (!sessionUser?.walletAddress) void queueMstIdentityAnchors(presentation);
       if (!Number.isFinite(challengeAge) || challengeAge < 0 || challengeAge > 5 * 60 * 1000) {
         return res.status(400).json({ error: 'Presentation expired' });
       }
-      if (spentChallenges[challengeKey]) {
+      if (spentChallenge) {
         return res.status(409).json({ error: 'Presentation challenge has already been spent' });
       }
-      spentChallenges[challengeKey] = Date.now();
-      for (const [key, timestamp] of Object.entries(spentChallenges)) {
-        if (Date.now() - timestamp > 10 * 60 * 1000) delete spentChallenges[key];
-      }
-      await saveAuthStore();
+      db.insert(spentChallenges).values({ challengeKey, spentAt: Date.now() }).run();
+      db.delete(spentChallenges).where(lt(spentChallenges.spentAt, Date.now() - 10 * 60 * 1000)).run();
     }
-
-    const ai = getGenAI();
 
     // Prepare feature vector description for AI
     const dwellMean = telemetry?.dwellTimeMean ?? 90;
@@ -619,7 +787,7 @@ DECENTRALIZED IDENTITY & GRAPH CONTEXT:
 Evaluate whether this session represents a legitimate human or an automated bot / Sybil attack.
 Provide a concise, highly professional security assessment summarizing the behavioral dynamics, entropy level, and zero-knowledge privacy status. Keep the summary to 2-3 sentences.`;
 
-    let aiSummary = await generateWithGeminiFallback(prompt);
+    let aiSummary = await generateWithLangChainFallback(prompt);
 
     // Fallback explanation if Gemini wasn't available or empty
     if (!aiSummary) {
@@ -679,9 +847,15 @@ Provide a concise, highly professional security assessment summarizing the behav
         console.warn('Optional MST audit anchoring failed:', error.message);
       });
     }
+    if (decision !== 'VERIFIED_HUMAN') {
+      const sessionUser = await getAuthenticatedUser(req);
+      db.insert(fraudFlags).values({ id: `flag_${randomBytes(8).toString('hex')}`, userId: sessionUser?.id || null, decision, createdAt: new Date().toISOString(), analysis: JSON.stringify(analysisResult) }).run();
+    }
     res.json(analysisResult);
   } catch (error: any) {
     console.error('Error in analyze-behavior-and-fraud:', error);
+    const sessionUser = await getAuthenticatedUser(req);
+    if (sessionUser) createNotification(sessionUser.id, 'error', 'Behavioral audit failed', error?.message || 'The behavioral audit could not be completed.');
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
@@ -703,7 +877,7 @@ Summarize how EigenTrust and SybilRank prevent bot syndicates from gaining dispr
   const cachedResponse = await getCachedResponse(cacheKey);
   if (cachedResponse) return res.json(JSON.parse(cachedResponse));
 
-    let analysis = await generateWithGeminiFallback(prompt);
+    let analysis = await generateWithLangChainFallback(prompt);
 
     if (!analysis) {
       analysis = `• Trust Seed Anchoring: Root authority credentials propagate trust through verified social distance, neutralizing isolated bot farm clusters.\n• Collusion Attack Isolation: Closed circular endorsement rings receive near-zero EigenTrust (<0.05) despite high internal link counts.\n• Privacy Preservation: Sybil defense relies purely on topological graph entropy and zero-knowledge commitments without storing raw user identity databases.`;

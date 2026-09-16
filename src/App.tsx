@@ -1,3 +1,5 @@
+import { useWallet } from './lib/useWallet';
+import { mstFaucetUrl } from './lib/wallet';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -6,6 +8,8 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback } from 'react';
 import { Navbar } from './components/Navbar';
 import { AuthPanel } from './components/AuthPanel';
+import { ExternalVerificationView } from './components/ExternalVerificationView';
+import { NotificationsView } from './components/NotificationsView';
 import { 
   KeyPairData, DIDDocument, VerifiableCredential, BehavioralTelemetry, 
   FraudAnalysisResult, VerifiablePresentation 
@@ -26,6 +30,8 @@ const BehavioralRadarView = lazy(() => import('./components/BehavioralRadarView'
 const NetworkGraphView = lazy(() => import('./components/NetworkGraphView').then(module => ({ default: module.NetworkGraphView })));
 const DAppGatewayView = lazy(() => import('./components/DAppGatewayView').then(module => ({ default: module.DAppGatewayView })));
 const AttackDefenseLabView = lazy(() => import('./components/AttackDefenseLabView').then(module => ({ default: module.AttackDefenseLabView })));
+const TransactionHistoryView = lazy(() => import('./components/TransactionHistoryView').then(module => ({ default: module.TransactionHistoryView })));
+const AdminPortalView = lazy(() => import('./components/AdminPortalView').then(module => ({ default: module.AdminPortalView })));
 
 const LoadingSpinner = () => (
   <div className="flex min-h-[24rem] items-center justify-center" role="status" aria-label="Loading workspace">
@@ -34,10 +40,12 @@ const LoadingSpinner = () => (
 );
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'wallet' | 'behavioral' | 'network' | 'dapps' | 'lab'>('wallet');
+  const [activeTab, setActiveTab] = useState<'wallet' | 'behavioral' | 'network' | 'dapps' | 'lab' | 'transactions' | 'notifications' | 'admin'>('wallet');
+  const [userRole, setUserRole] = useState<'user' | 'admin'>('user');
   
   // Cryptographic DID & Keys
   const [userDid, setUserDid] = useState<string>('');
+  const { wallet, connect, disconnect, switchNetwork, isConnecting, isWrongNetwork, hasInsufficientBalance, walletConfigurationError } = useWallet(userDid);
   const [keyPairData, setKeyPairData] = useState<KeyPairData | null>(null);
   const [cryptoKeyPair, setCryptoKeyPair] = useState<CryptoKeyPair | null>(null);
   const [didDocument, setDidDocument] = useState<DIDDocument | null>(null);
@@ -215,11 +223,11 @@ export default function App() {
   useEffect(() => {
     initializeIdentity();
 
-    // Check health of Gemini Backend
+    // Check health of LangChain AI backend
     fetch('/api/health')
       .then(res => res.json())
       .then(data => {
-        setIsAiConnected(Boolean(data.geminiConfigured));
+        setIsAiConnected(Boolean(data.aiConfigured));
       })
       .catch(() => {
         setIsAiConnected(false);
@@ -280,11 +288,21 @@ export default function App() {
     ? { Authorization: `Bearer ${apiKeyAuth.key}` }
     : {};
 
+  const redactedPredicateClaims = () => credentials.flatMap(credential => credential.zkDisclosableClaims.map(({ value: _value, ...claim }) => claim));
+
+  const requestTelemetryChallenge = async (): Promise<string> => {
+    const response = await fetch('/api/ai/telemetry-challenge', { credentials: 'include' });
+    const data = await response.json();
+    if (!response.ok || typeof data.challenge !== 'string') throw new Error('Unable to obtain a behavioral telemetry challenge');
+    return data.challenge;
+  };
+
   const handleRunAiAnalysis = async (customTelemetry?: BehavioralTelemetry, attackType?: string) => {
     setIsAiLoading(true);
     setActionError(null);
     try {
       const payloadTelemetry = customTelemetry || globalBehavioralCollector.getTelemetry();
+      const telemetryChallenge = await requestTelemetryChallenge();
       
       const res = await fetch('/api/ai/analyze-behavior-and-fraud', {
         method: 'POST',
@@ -292,10 +310,11 @@ export default function App() {
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           telemetry: payloadTelemetry,
+          telemetryChallenge,
           presentation: {
             holder: userDid,
             zkProofs: {
-              predicateProofs: credentials.flatMap(c => c.zkDisclosableClaims),
+                predicateProofs: redactedPredicateClaims(),
             },
           },
           networkContext: {
@@ -315,7 +334,7 @@ export default function App() {
       console.error('AI Analysis error:', err);
       setIsAiConnected(false);
       setLatestAiAnalysis(buildLocalAnalysis(customTelemetry || globalBehavioralCollector.getTelemetry(), attackType));
-      setActionError(err instanceof Error && err.message === 'AUTH_REQUIRED' ? 'Sign in or enable a valid API key to run the server AI audit.' : err instanceof Error && err.message === 'RATE_LIMIT' ? 'AI request limit reached: 30 requests per minute for this session/key.' : 'Gemini is unavailable, so the local privacy-preserving rules engine supplied this audit.');
+      setActionError(err instanceof Error && err.message === 'AUTH_REQUIRED' ? 'Sign in or enable a valid API key to run the server AI audit.' : err instanceof Error && err.message === 'RATE_LIMIT' ? 'AI request limit reached: 30 requests per minute for this session/key.' : 'LangChain AI is unavailable, so the local privacy-preserving rules engine supplied this audit.');
     } finally {
       setIsAiLoading(false);
     }
@@ -330,6 +349,7 @@ export default function App() {
         throw new Error('Presentation challenge binding is invalid');
       }
       const currentTelemetry = globalBehavioralCollector.getTelemetry();
+      const telemetryChallenge = await requestTelemetryChallenge();
 
       const res = await fetch('/api/ai/analyze-behavior-and-fraud', {
         method: 'POST',
@@ -337,6 +357,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           telemetry: currentTelemetry,
+          telemetryChallenge,
           presentation,
           networkContext: {
             eigenTrust: 0.88,
@@ -374,6 +395,7 @@ export default function App() {
       }
 
       injectedTelemetry = globalBehavioralCollector.getTelemetry();
+      const telemetryChallenge = await requestTelemetryChallenge();
 
       const res = await fetch('/api/ai/analyze-behavior-and-fraud', {
         method: 'POST',
@@ -381,10 +403,11 @@ export default function App() {
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           telemetry: injectedTelemetry,
+          telemetryChallenge,
           presentation: {
             holder: userDid,
             zkProofs: {
-              predicateProofs: credentials.flatMap(c => c.zkDisclosableClaims),
+              predicateProofs: redactedPredicateClaims(),
             },
           },
           networkContext: {
@@ -456,7 +479,14 @@ export default function App() {
     network: { eyebrow: 'TRUST GRAPH', title: 'See trust move through the network', detail: 'Inspect issuer relationships and isolate collusion before it scales.' },
     dapps: { eyebrow: 'VERIFIER GATEWAY', title: 'Access without exposing yourself', detail: 'Turn verified credentials into audience-bound, zero-knowledge sessions.' },
     lab: { eyebrow: 'ADVERSARIAL LAB', title: 'Break it before attackers do', detail: 'Run realistic fraud scenarios and watch the defense explain its decision.' },
+    transactions: { eyebrow: 'WALLET LEDGER', title: 'Your on-chain activity', detail: 'Review wallet-signed registry transactions and their verified chain status.' },
+    notifications: { eyebrow: 'ACCOUNT UPDATES', title: 'Stay informed', detail: 'System status, security notices, and important administrator messages.' },
+    admin: { eyebrow: 'ADMIN CONTROL PLANE', title: 'Platform oversight', detail: 'Review accounts, fraud flags, audit history, and account status.' },
   }[activeTab];
+
+  if (typeof window !== 'undefined' && window.location.pathname === '/verify-request') {
+    return <ExternalVerificationView userDid={userDid} userPrivateKey={cryptoKeyPair?.privateKey || null} userPublicKeyJwk={keyPairData?.publicKeyJwk || null} credentials={credentials} />;
+  }
 
   return (
     <div className="aegis-shell min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
@@ -467,6 +497,19 @@ export default function App() {
         userDid={userDid}
         humanityScore={humanityScore}
         isAiConnected={isAiConnected}
+        walletAddress={wallet.address}
+        walletNetwork={wallet.chainName}
+        walletError={wallet.error}
+        isWrongNetwork={isWrongNetwork}
+        isConnectingWallet={isConnecting}
+        onConnectWallet={() => void connect()}
+        onDisconnectWallet={disconnect}
+        onSwitchNetwork={() => void switchNetwork()}
+        nativeBalance={wallet.nativeBalance}
+        hasInsufficientBalance={hasInsufficientBalance}
+        walletConfigurationError={walletConfigurationError}
+        faucetUrl={mstFaucetUrl}
+        userRole={userRole}
       />
 
       {actionError && (
@@ -478,7 +521,7 @@ export default function App() {
         </div>
       )}
 
-      <AuthPanel onApiKeyChange={(key, enabled) => setApiKeyAuth({ key, enabled })} />
+      <AuthPanel onApiKeyChange={(key, enabled) => setApiKeyAuth({ key, enabled })} onUserChange={user => { setUserRole(user?.role || 'user'); if (user && wallet.address) void fetch('/api/auth/wallet', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: wallet.address, did: userDid }) }); }} />
 
       <section className="mx-auto mt-5 w-full max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="aegis-panel relative overflow-hidden rounded-2xl px-5 py-5 sm:px-7 sm:py-6">
@@ -507,6 +550,8 @@ export default function App() {
               credentials={credentials}
               onGenerateNewIdentity={rotateIdentity}
               onAddCredential={handleAddCredential}
+              walletAddress={wallet.address}
+              canWriteOnChain={Boolean(wallet.address && !isWrongNetwork && !hasInsufficientBalance && !walletConfigurationError)}
             /></Suspense>
         )}
 
@@ -545,6 +590,10 @@ export default function App() {
             isAiLoading={isAiLoading}
           /></Suspense>
         )}
+
+        {activeTab === 'transactions' && <Suspense fallback={<LoadingSpinner />}><TransactionHistoryView /></Suspense>}
+        {activeTab === 'notifications' && <NotificationsView />}
+        {activeTab === 'admin' && userRole === 'admin' && <Suspense fallback={<LoadingSpinner />}><AdminPortalView /></Suspense>}
       </main>
 
       {/* Footer */}

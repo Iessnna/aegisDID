@@ -236,10 +236,12 @@ export async function createVerifiablePresentation(params: {
 
   const revealedClaims: Record<string, any> = {};
   const predicateProofs: ZeroKnowledgeProof['predicateProofs'] = [];
+  const redactedCredentials: VerifiableCredential[] = [];
 
   for (const cred of credentials) {
     const disclosureConfig = selectedDisclosures.find(d => d.credentialId === cred.id);
     if (!disclosureConfig) continue;
+    const revealedKeys = new Set(disclosureConfig.revealRawClaims);
 
     // Handle openly revealed claims
     for (const key of disclosureConfig.revealRawClaims) {
@@ -266,9 +268,18 @@ export async function createVerifiablePresentation(params: {
           satisfied: proof.satisfied,
           commitmentHash: zkClaim.commitmentHash,
           zkWitnessProof: proof.zkWitnessProof,
+          issuerAttestation: cred.proof.predicateAttestations?.find(attestation => attestation.claimKey === zkReq.claimKey && attestation.predicate === proof.predicate),
         });
       }
     }
+
+    redactedCredentials.push({
+      ...cred,
+      credentialSubject: Object.fromEntries(Object.entries(cred.credentialSubject).filter(([key]) => key === 'id' || revealedKeys.has(key))) as VerifiableCredential['credentialSubject'],
+      zkDisclosableClaims: cred.zkDisclosableClaims.map(claim => revealedKeys.has(claim.claimKey)
+        ? { ...claim }
+        : (({ value: _value, ...redactedClaim }) => redactedClaim)(claim)),
+    });
   }
 
   const blindedSubjectId = await sha256(`${holderDid}:${verifierNonce}:${audience}`);
@@ -298,7 +309,7 @@ export async function createVerifiablePresentation(params: {
   return {
     id: presentationId,
     type: ['VerifiablePresentation', 'AegisZeroKYCPresentation'],
-    verifiableCredential: credentials.filter(credential => selectedDisclosures.some(disclosure => disclosure.credentialId === credential.id)),
+    verifiableCredential: redactedCredentials,
     holder: holderDid,
     presentationNonce: verifierNonce,
     audience,
@@ -341,6 +352,7 @@ export async function issueVerifiableCredential(params: {
     label: string;
     predicateType?: 'gte' | 'eq' | 'in' | 'boolean' | 'hash';
     predicateDescription?: string;
+    attestationPredicates?: string[];
   }[];
   expiresInDays?: number;
 }): Promise<VerifiableCredential> {
@@ -364,6 +376,7 @@ export async function issueVerifiableCredential(params: {
   // Generate ZK commitments for claims
   const zkDisclosableClaims: VerifiableCredential['zkDisclosableClaims'] = [];
   const claimHashes: Record<string, string> = {};
+  const predicateAttestations: NonNullable<VerifiableCredential['proof']['predicateAttestations']> = [];
 
   for (const spec of zkClaimSpecs) {
     const rawVal = claims[spec.claimKey];
@@ -379,6 +392,22 @@ export async function issueVerifiableCredential(params: {
         commitmentHash,
       });
       claimHashes[spec.claimKey] = commitmentHash;
+      const predicates = spec.attestationPredicates?.length
+        ? spec.attestationPredicates
+        : (spec.predicateType === 'gte'
+          ? ((spec.label.match(/>=\s*\d+(?:\.\d+)?/g) || []).map(match => `${spec.claimKey} ${match}`) || [`${spec.claimKey} >= ${rawVal}`])
+          : [`${spec.claimKey} is ${Boolean(rawVal)}`]);
+      for (const predicate of predicates) {
+        const satisfied = predicate.includes('>=')
+          ? Number(rawVal) >= Number(predicate.match(/>=\s*(\d+(?:\.\d+)?)/)?.[1] || 0)
+          : Boolean(rawVal);
+        predicateAttestations.push({
+          claimKey: spec.claimKey,
+          predicate,
+          satisfied,
+          signatureValue: await signMessage(`${credId}:${spec.claimKey}:${predicate}:${satisfied ? 'PASS' : 'FAIL'}`, issuerPrivateKey),
+        });
+      }
     }
   }
 
@@ -392,6 +421,7 @@ export async function issueVerifiableCredential(params: {
     expirationDate: expDate,
     claimsSummaryHash: await sha256(JSON.stringify(claims)),
     claimHashes,
+    predicateAttestations,
   });
 
   const signatureValue = await signMessage(payloadToSign, issuerPrivateKey);
@@ -420,6 +450,8 @@ export async function issueVerifiableCredential(params: {
       signatureValue,
       publicKeyJwk,
       claimHashes,
+      claimsSummaryHash: await sha256(JSON.stringify(claims)),
+      predicateAttestations,
     },
   };
 }

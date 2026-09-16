@@ -40,6 +40,13 @@ export interface CredentialProof {
   nonce?: string;
   claimHashes?: Record<string, string>;
   publicKeyJwk?: JsonWebKey;
+  claimsSummaryHash?: string;
+  predicateAttestations?: {
+    claimKey: string;
+    predicate: string;
+    satisfied: boolean;
+    signatureValue: string;
+  }[];
 }
 
 export interface VerifiableCredential {
@@ -58,7 +65,7 @@ export interface VerifiableCredential {
   zkDisclosableClaims: {
     claimKey: string;
     label: string;
-    value: any;
+    value?: any;
     predicateType?: 'gte' | 'eq' | 'in' | 'boolean' | 'hash';
     predicateDescription?: string;
     salt: string;
@@ -74,6 +81,12 @@ export interface ZeroKnowledgeProof {
     satisfied: boolean;
     commitmentHash: string;
     zkWitnessProof: string;
+    issuerAttestation?: {
+      claimKey: string;
+      predicate: string;
+      satisfied: boolean;
+      signatureValue: string;
+    };
   }[];
   blindedSubjectId: string;
 }

@@ -1,12 +1,25 @@
 import React from 'react';
-import { Shield, Fingerprint, Network, Cpu, FlaskConical, Wallet, Copy, Check, Menu, X } from 'lucide-react';
+import { Shield, Fingerprint, Network, Cpu, FlaskConical, Wallet, Bell, Copy, Check, Menu, X, ExternalLink, LogOut } from 'lucide-react';
 
 interface NavbarProps {
-  activeTab: 'wallet' | 'behavioral' | 'network' | 'dapps' | 'lab';
-  setActiveTab: (tab: 'wallet' | 'behavioral' | 'network' | 'dapps' | 'lab') => void;
+  activeTab: 'wallet' | 'behavioral' | 'network' | 'dapps' | 'lab' | 'transactions' | 'notifications' | 'admin';
+  setActiveTab: (tab: 'wallet' | 'behavioral' | 'network' | 'dapps' | 'lab' | 'transactions' | 'notifications' | 'admin') => void;
   userDid: string;
   humanityScore: number;
   isAiConnected: boolean;
+  walletAddress: string | null;
+  walletNetwork: string | null;
+  walletError: string | null;
+  isWrongNetwork: boolean;
+  isConnectingWallet: boolean;
+  onConnectWallet: () => void;
+  onDisconnectWallet: () => void;
+  onSwitchNetwork: () => void;
+  nativeBalance: string | null;
+  hasInsufficientBalance: boolean;
+  walletConfigurationError: string | null;
+  faucetUrl: string;
+  userRole?: 'user' | 'admin';
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -15,6 +28,19 @@ export const Navbar: React.FC<NavbarProps> = ({
   userDid,
   humanityScore,
   isAiConnected,
+  walletAddress,
+  walletNetwork,
+  walletError,
+  isWrongNetwork,
+  isConnectingWallet,
+  onConnectWallet,
+  onDisconnectWallet,
+  onSwitchNetwork,
+  nativeBalance,
+  hasInsufficientBalance,
+  walletConfigurationError,
+  faucetUrl,
+  userRole,
 }) => {
   const [copied, setCopied] = React.useState(false);
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
@@ -38,6 +64,9 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'network', label: 'Trust Graph', icon: Network, badge: 'EigenTrust' },
     { id: 'dapps', label: 'Zero-Knowledge Apps', icon: Shield, badge: 'Verifier Gateway' },
     { id: 'lab', label: 'Attack Lab', icon: FlaskConical, badge: 'Simulation' },
+    { id: 'transactions', label: 'My Transactions', icon: Wallet, badge: 'On-chain history' },
+    { id: 'notifications', label: 'Notifications', icon: Bell, badge: 'System updates' },
+    ...(userRole === 'admin' ? [{ id: 'admin', label: 'Admin Portal', icon: Shield, badge: 'Restricted' }] : []),
   ] as const;
 
   return (
@@ -67,6 +96,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* User DID Pill */}
           <div className="flex items-center gap-2 sm:gap-3">
+            {walletAddress ? <div className="flex items-center gap-2 rounded-lg border border-[#b8ef78]/20 bg-[#b8ef78]/5 px-2.5 py-1.5 text-xs"><span className="font-mono text-[#b8ef78]">{walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}</span><span className="hidden lg:inline text-slate-500">{walletNetwork || 'Wallet'}</span><button onClick={onDisconnectWallet} title="Disconnect wallet" className="text-slate-400 hover:text-white"><LogOut className="h-3.5 w-3.5" /></button></div> : <button onClick={onConnectWallet} disabled={isConnectingWallet} className="flex items-center gap-2 rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-200 hover:bg-cyan-400/20 disabled:opacity-60"><Wallet className="h-3.5 w-3.5" />{isConnectingWallet ? 'Connecting...' : 'Connect Wallet'}</button>}
             <button
               onClick={handleCopyDid}
               title="Click to copy your Self-Sovereign Decentralized Identifier"
@@ -108,10 +138,14 @@ export const Navbar: React.FC<NavbarProps> = ({
               }`}
             >
               <Cpu className="w-3.5 h-3.5 text-cyan-400" />
-                <span>{isAiConnected ? 'Gemini online' : 'Local engine'}</span>
+                <span>{isAiConnected ? 'LangChain AI online' : 'Local engine'}</span>
             </div>
           </div>
         </div>
+        {walletError && <div className="border-t border-white/[0.06] py-2 text-xs text-amber-300">{walletError === 'NO_WALLET' ? <><a className="inline-flex items-center gap-1 underline" href="https://metamask.io/download/" target="_blank" rel="noreferrer">Install MetaMask <ExternalLink className="h-3 w-3" /></a> to connect an EIP-1193 wallet.</> : walletError}</div>}
+        {walletConfigurationError && <div className="border-t border-white/[0.06] py-2 text-xs text-rose-300">{walletConfigurationError}</div>}
+        {isWrongNetwork && <div className="border-t border-white/[0.06] py-2 text-xs text-amber-300"><button onClick={onSwitchNetwork} className="underline">Switch to {mstChainName()}</button> to sign MST transactions.</div>}
+        {walletAddress && nativeBalance !== null && <div className={`border-t border-white/[0.06] py-2 text-xs ${hasInsufficientBalance ? 'text-amber-300' : 'text-slate-400'}`}>MST balance: {Number(nativeBalance).toFixed(4)} MST{hasInsufficientBalance && <>. Add testnet MST before signing. {faucetUrl ? <a className="underline" href={faucetUrl} target="_blank" rel="noreferrer">Open faucet</a> : 'No faucet is configured.'}</>}</div>}
 
         {/* Navigation Tabs */}
         <nav className={`${isMenuOpen ? 'grid' : 'hidden'} sm:flex grid-cols-2 gap-1.5 sm:space-x-2 overflow-x-auto py-2 border-t border-slate-900`}>
@@ -121,7 +155,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             return (
               <button
                 key={item.id}
-                onClick={() => selectTab(item.id)}
+                onClick={() => selectTab(item.id as NavbarProps['activeTab'])}
                 className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
                   isActive
                     ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 shadow-sm shadow-cyan-500/10'
@@ -138,3 +172,5 @@ export const Navbar: React.FC<NavbarProps> = ({
     </header>
   );
 };
+
+function mstChainName() { return import.meta.env.VITE_MST_NETWORK_NAME || 'MST Testnet'; }

@@ -51,6 +51,7 @@ export const NetworkGraphView: React.FC<NetworkGraphViewProps> = ({
           <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
             Graph neural topology analysis using EigenTrust & SybilRank. Isolates circular bot-farm endorsement rings and validates human social distance from cryptographically anchored seeds without centralized database tracking.
           </p>
+          <p className="mt-2 text-[11px] font-semibold text-amber-300">Illustrative network — not your live user graph.</p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -320,7 +321,7 @@ export const NetworkGraphView: React.FC<NetworkGraphViewProps> = ({
             <div className="p-4 rounded-2xl bg-slate-900 border border-cyan-900/50 space-y-2 animate-in fade-in">
               <div className="flex items-center gap-2 text-cyan-400 text-xs font-bold">
                 <Sparkles className="w-4 h-4" />
-                <span>Gemini 3.7 Topology Audit</span>
+                <span>LangChain Topology Audit</span>
               </div>
               <p className="text-xs text-slate-300 whitespace-pre-line leading-relaxed font-sans">
                 {networkAuditSummary}

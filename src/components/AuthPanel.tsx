@@ -10,14 +10,16 @@ interface ApiKeyMetadata {
 interface AuthUser {
   id: string;
   email: string;
+  role?: 'user' | 'admin';
 }
 
 interface AuthPanelProps {
   onAuthChange?: (authenticated: boolean) => void;
   onApiKeyChange?: (apiKey: string, enabled: boolean) => void;
+  onUserChange?: (user: AuthUser | null) => void;
 }
 
-export const AuthPanel: React.FC<AuthPanelProps> = ({ onAuthChange, onApiKeyChange }) => {
+export const AuthPanel: React.FC<AuthPanelProps> = ({ onAuthChange, onApiKeyChange, onUserChange }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [apiKeys, setApiKeys] = useState<ApiKeyMetadata[]>([]);
   const [email, setEmail] = useState('');
@@ -25,6 +27,7 @@ export const AuthPanel: React.FC<AuthPanelProps> = ({ onAuthChange, onApiKeyChan
   const [keyName, setKeyName] = useState('Hackathon demo integration');
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);
+  const [isAdminLogin, setIsAdminLogin] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -37,6 +40,7 @@ export const AuthPanel: React.FC<AuthPanelProps> = ({ onAuthChange, onApiKeyChan
     setUser(nextUser);
     setApiKeys(nextKeys);
     onAuthChange?.(Boolean(nextUser));
+    onUserChange?.(nextUser);
   };
 
   useEffect(() => {
@@ -126,15 +130,16 @@ export const AuthPanel: React.FC<AuthPanelProps> = ({ onAuthChange, onApiKeyChan
           <div className="flex items-start gap-3">
             <div className="rounded-xl border border-cyan-400/20 bg-cyan-400/10 p-2 text-cyan-300"><ShieldCheck className="h-5 w-5" /></div>
             <div>
-              <p className="text-sm font-semibold text-white">Authorize integrations</p>
-              <p className="mt-1 max-w-xl text-xs leading-relaxed text-slate-400">Sign in to create an AegisDID API key. Gemini credentials remain server-only and are never generated or exposed here.</p>
+              <p className="text-sm font-semibold text-white">{isAdminLogin ? 'Administrator sign-in' : 'Authorize integrations'}</p>
+              <p className="mt-1 max-w-xl text-xs leading-relaxed text-slate-400">{isAdminLogin ? 'Use the seeded ADMIN_EMAIL and ADMIN_PASSWORD account. Successful login unlocks the Admin Portal automatically.' : 'Sign in to create an AegisDID API key. AI provider credentials remain server-only and are never generated or exposed here.'}</p>
             </div>
           </div>
           <form onSubmit={submitAuth} className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <input required type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="you@example.com" className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white outline-none focus:border-cyan-400/60" />
             <input required minLength={10} type="password" value={password} onChange={event => setPassword(event.target.value)} placeholder="10+ character password" className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white outline-none focus:border-cyan-400/60" />
             <button disabled={isSubmitting} type="submit" className="flex items-center justify-center gap-2 rounded-lg bg-cyan-400 px-3 py-2 text-xs font-bold text-[#071018] hover:bg-cyan-300 disabled:cursor-wait disabled:opacity-60">{isSubmitting ? 'Working...' : <>{isRegistering ? <UserPlus className="h-3.5 w-3.5" /> : <LogIn className="h-3.5 w-3.5" />}{isRegistering ? 'Create account' : 'Sign in'}</>}</button>
-            <button type="button" onClick={() => setIsRegistering(previous => !previous)} className="px-2 py-2 text-xs text-slate-400 hover:text-white">{isRegistering ? 'I have an account' : 'Create account'}</button>
+            {!isAdminLogin && <button type="button" onClick={() => setIsRegistering(previous => !previous)} className="px-2 py-2 text-xs text-slate-400 hover:text-white">{isRegistering ? 'I have an account' : 'Create account'}</button>}
+            <button type="button" onClick={() => { setIsAdminLogin(previous => !previous); setIsRegistering(false); setError(null); }} className="px-2 py-2 text-xs text-amber-300 hover:text-amber-200">{isAdminLogin ? 'User sign-in' : 'Admin sign-in'}</button>
           </form>
         </div>
       ) : (

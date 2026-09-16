@@ -173,7 +173,7 @@ export const DAppGatewayView: React.FC<DAppGatewayViewProps> = ({
             <h2 className="text-base font-semibold text-white">Zero-KYC Verifier Gateway</h2>
           </div>
           <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-            Real consumer dApps interacting with AegisDID. The dApp receives cryptographic proof of eligibility and AI-validated humanity in &lt;200ms without maintaining a centralized database of passport photos or personal identity records.
+            Example verifier requests for integration testing. External sites receive redacted credentials plus issuer-signed predicate attestations, not the underlying claim values.
           </p>
         </div>
       </div>

@@ -127,7 +127,7 @@ export const VerifiablePresentationModal: React.FC<VerifiablePresentationModalPr
             <span className="text-cyan-300 font-bold">{dappRequest.nonce}</span>
           </div>
           <p className="text-[11px] text-slate-400">
-            🔒 This one-time challenge ensures the verifier cannot replay your presentation on other websites.
+            This one-time challenge binds the presentation to this verifier. Predicate values remain redacted; the issuer-signed attestation proves only the requested predicate result.
           </p>
         </div>
 
@@ -139,7 +139,7 @@ export const VerifiablePresentationModal: React.FC<VerifiablePresentationModalPr
             </span>
             <span className="text-emerald-400 font-mono flex items-center gap-1 text-[11px]">
               <Sparkles className="w-3 h-3" />
-              100% Privacy Preserving
+              Redacted claims + issuer attestations
             </span>
           </div>
 

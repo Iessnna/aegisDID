@@ -14,6 +14,8 @@ interface BehavioralRadarViewProps {
   isAiLoading: boolean;
 }
 
+type SecurityEvent = { time: string; message: string; kind: 'ok' | 'warn' | 'danger' };
+
 export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
   telemetry,
   latestAiAnalysis,
@@ -24,7 +26,7 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
   const [activeSimulation, setActiveSimulation] = useState<'organic' | 'linear_bot' | 'instant_replay'>('organic');
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [mouseTrail, setMouseTrail] = useState<{ x: number; y: number }[]>([]);
-  const [securityEvents, setSecurityEvents] = useState<Array<{ time: string; message: string; kind: 'ok' | 'warn' | 'danger' }>>([
+  const [securityEvents, setSecurityEvents] = useState<SecurityEvent[]>([
     { time: new Date().toLocaleTimeString(), message: 'Identity session initialized', kind: 'ok' },
     { time: new Date().toLocaleTimeString(), message: 'Behavioral listener active', kind: 'ok' },
     { time: new Date().toLocaleTimeString(), message: 'Zero-knowledge predicates ready', kind: 'ok' },
@@ -91,7 +93,7 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
 
   const handleSimulateMode = (mode: 'organic' | 'linear_bot' | 'instant_replay') => {
     setActiveSimulation(mode);
-    const event = mode === 'organic'
+    const event: Pick<SecurityEvent, 'message' | 'kind'> = mode === 'organic'
       ? { message: 'Organic human mode restored', kind: 'ok' as const }
       : mode === 'linear_bot'
         ? { message: 'Scripted bot telemetry injected', kind: 'warn' as const }
@@ -116,7 +118,7 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
     setSecurityEvents(prev => [{
       time: new Date().toLocaleTimeString(),
       message: 'Neural trust audit requested',
-      kind: 'ok',
+      kind: 'ok' as const,
     }, ...prev].slice(0, 6));
     onRunAiAnalysis(currentTelemetry, activeSimulation === 'organic' ? undefined : activeSimulation);
   };
@@ -127,7 +129,7 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
     setSecurityEvents(prev => [{
       time: new Date().toLocaleTimeString(),
       message: isThreat ? `Threat blocked: ${latestAiAnalysis.decision}` : 'Humanity verified by neural trust engine',
-      kind: isThreat ? 'danger' : 'ok',
+      kind: isThreat ? 'danger' as const : 'ok' as const,
     }, ...prev].slice(0, 6));
   }, [latestAiAnalysis]);
 
@@ -190,6 +192,7 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
           <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
             Continuous passive human verification analyzing micro-dynamics: keystroke flight entropy, cursor acceleration jitter, and trajectory curvature. Detects automated Puppeteer/Selenium headless bots instantly without intrusive CAPTCHAs.
           </p>
+          <p className="mt-2 text-[11px] text-amber-300">Telemetry is client-reported and best-effort, not cryptographically attested. Treat it as one signal among many, not a hard proof.</p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -199,7 +202,7 @@ export const BehavioralRadarView: React.FC<BehavioralRadarViewProps> = ({
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-bold shadow-lg shadow-cyan-500/20 transition-all cursor-pointer"
           >
             {isAiLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Cpu className="w-4 h-4" />}
-            <span>Run Gemini AI Behavioral Audit</span>
+            <span>Run LangChain AI Behavioral Audit</span>
           </button>
         </div>
       </div>

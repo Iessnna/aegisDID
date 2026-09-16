@@ -6,6 +6,8 @@ import {
 } from 'lucide-react';
 import { VerifiableCredential, DIDDocument, KeyPairData } from '../types';
 import { issueVerifiableCredential } from '../lib/crypto';
+import { keccak256, toUtf8Bytes } from 'ethers';
+import { submitUserTransaction } from '../lib/wallet';
 
 interface DIDWalletViewProps {
   userDid: string;
@@ -14,6 +16,8 @@ interface DIDWalletViewProps {
   credentials: VerifiableCredential[];
   onGenerateNewIdentity: () => void;
   onAddCredential: (cred: VerifiableCredential) => void;
+  walletAddress: string | null;
+  canWriteOnChain: boolean;
 }
 
 export const DIDWalletView: React.FC<DIDWalletViewProps> = ({
@@ -23,6 +27,8 @@ export const DIDWalletView: React.FC<DIDWalletViewProps> = ({
   credentials,
   onGenerateNewIdentity,
   onAddCredential,
+  walletAddress,
+  canWriteOnChain,
 }) => {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [showDIDDoc, setShowDIDDoc] = useState(false);
@@ -36,6 +42,21 @@ export const DIDWalletView: React.FC<DIDWalletViewProps> = ({
   const [newClaimValue, setNewClaimValue] = useState('8500');
   const [newPredicateLabel, setNewPredicateLabel] = useState('Income >= $5,000 / mo');
   const [isIssuingLoading, setIsIssuingLoading] = useState(false);
+  const [chainStatus, setChainStatus] = useState<string | null>(null);
+  const [chainError, setChainError] = useState<string | null>(null);
+
+  const registerDidOnChain = async () => {
+    setChainError(null); setChainStatus('Waiting for wallet confirmation');
+    try { const hash = await submitUserTransaction('DID registration', contract => contract.registerDID(userDid, toUtf8Bytes(JSON.stringify(keyPairData?.publicKeyJwk || {})))); setChainStatus(`Confirmed: ${hash}`); }
+    catch (error) { setChainStatus(null); setChainError(error instanceof Error ? error.message : 'DID registration failed'); }
+  };
+
+  const anchorSelectedCredential = async () => {
+    if (!selectedCred) return;
+    setChainError(null); setChainStatus('Waiting for wallet confirmation');
+    try { const hash = await submitUserTransaction('Credential anchor', contract => contract.anchorCredential(keccak256(toUtf8Bytes(JSON.stringify(selectedCred))), userDid)); setChainStatus(`Confirmed: ${hash}`); }
+    catch (error) { setChainStatus(null); setChainError(error instanceof Error ? error.message : 'Credential anchoring failed'); }
+  };
 
   const copyToClipboard = (text: string, fieldName: string) => {
     if (typeof navigator !== 'undefined') {
@@ -141,6 +162,11 @@ export const DIDWalletView: React.FC<DIDWalletViewProps> = ({
             </button>
           </div>
         </div>
+      </div>
+
+      <div className="aegis-panel rounded-2xl border border-[#b8ef78]/20 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-[10px] uppercase tracking-[0.2em] text-[#b8ef78]">WALLET-SIGNED REGISTRY</p><p className="mt-1 text-xs text-slate-400">{walletAddress ? `Signer ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : 'Connect a wallet to sign registry writes.'}</p></div><div className="flex gap-2"><button disabled={!canWriteOnChain || !keyPairData} onClick={() => void registerDidOnChain()} className="rounded-lg bg-[#b8ef78] px-3 py-2 text-xs font-bold text-[#071018] disabled:opacity-40">Register DID</button><button disabled={!canWriteOnChain || !selectedCred} onClick={() => void anchorSelectedCredential()} className="rounded-lg border border-cyan-400/30 px-3 py-2 text-xs font-semibold text-cyan-200 disabled:opacity-40">Anchor selected credential</button></div></div>
+        {chainStatus && <p className="mt-3 text-xs text-emerald-300">{chainStatus}</p>}{chainError && <p className="mt-3 text-xs text-rose-300">Failed: {chainError}</p>}
       </div>
 
       {/* DID & Cryptographic Keypair Card */}

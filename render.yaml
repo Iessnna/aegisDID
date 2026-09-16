@@ -2,7 +2,7 @@ services:
   - type: web
     name: aegis-did
     runtime: node
-    buildCommand: npm install && npm run build
+    buildCommand: npm install && npm run db:migrate && npm run db:seed && npm run build
     startCommand: npm start
     healthCheckPath: /api/blockchain/status
     disk:
@@ -25,4 +25,10 @@ services:
       - key: MST_PRIVATE_KEY
         sync: false
       - key: MST_CREDENTIAL_REGISTRY_ADDRESS
+        sync: false
+      - key: DATABASE_PATH
+        value: /opt/render/project/src/data/aegisdid.db
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
         sync: false

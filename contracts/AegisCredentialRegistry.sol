@@ -3,6 +3,14 @@ pragma solidity ^0.8.20;
 
 contract AegisCredentialRegistry {
     address public immutable owner;
+    mapping(address => bool) public authorizedCallers;
+    mapping(bytes32 => bool) public revokedDIDs;
+    mapping(bytes32 => bool) public revokedCredentials;
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "not registry owner");
+        _;
+    }
 
     struct CredentialAnchor {
         address issuer;
@@ -18,16 +26,16 @@ contract AegisCredentialRegistry {
     event DIDRegistered(bytes32 indexed didHash, string did);
     event AuditRecorded(bytes32 indexed recordHash, string decision, uint256 humanityScore);
 
-    modifier onlyOwner() {
+    function authorizeCaller(address caller, bool allowed) external {
         require(msg.sender == owner, "not registry owner");
-        _;
+        authorizedCallers[caller] = allowed;
     }
 
     constructor() {
         owner = msg.sender;
     }
 
-    function anchorCredential(bytes32 credentialHash, string calldata holder) external onlyOwner returns (bytes32) {
+    function anchorCredential(bytes32 credentialHash, string calldata holder) external returns (bytes32) {
     require(
         credentials[credentialHash].timestamp == 0,
         "credential already anchored"
@@ -48,16 +56,25 @@ contract AegisCredentialRegistry {
     return credentialHash;
 }
 
-    function registerDID(string calldata did, bytes calldata publicKey) external onlyOwner returns (bytes32) {
+    function registerDID(string calldata did, bytes calldata publicKey) external returns (bytes32) {
         bytes32 didHash = keccak256(bytes(did));
         didKeys[didHash] = string(publicKey);
         emit DIDRegistered(didHash, did);
         return didHash;
     }
 
-    function logAuditRecord(bytes32 recordHash, string calldata decision, uint256 humanityScore) external onlyOwner returns (bytes32) {
+    function logAuditRecord(bytes32 recordHash, string calldata decision, uint256 humanityScore) external returns (bytes32) {
         auditRecords[recordHash] = true;
         emit AuditRecorded(recordHash, decision, humanityScore);
         return recordHash;
+    }
+
+    function revokeCredential(bytes32 credentialHash) external onlyOwner {
+        require(credentials[credentialHash].timestamp != 0, "credential not anchored");
+        revokedCredentials[credentialHash] = true;
+    }
+
+    function revokeDID(string calldata did) external onlyOwner {
+        revokedDIDs[keccak256(bytes(did))] = true;
     }
 }
