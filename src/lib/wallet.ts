@@ -1,5 +1,26 @@
 import { BrowserProvider, Contract, formatEther, type Eip1193Provider } from 'ethers';
 
+const mstDefaults = {
+  chainId: '0x5752035',
+  chainName: 'MST Testnet',
+  rpcUrl: 'https://testnetrpc.mstblockchain.com',
+  explorerUrl: 'https://testnet.mstscan.com',
+  registryAddress: '0x8ea34e36670557A552c25F37A81b895Ca0535F6c',
+  faucetUrl: '',
+  minNativeBalance: '0.001',
+};
+
+const env = (typeof import.meta !== 'undefined' ? import.meta.env : {}) as Record<string, string | undefined>;
+const resolvedMstConfig = {
+  chainId: env['VITE_MST_CHAIN_ID'] || env['MST_CHAIN_ID'] || mstDefaults.chainId,
+  chainName: env['VITE_MST_NETWORK_NAME'] || env['MST_NETWORK'] || mstDefaults.chainName,
+  rpcUrl: env['VITE_MST_RPC_URL'] || env['MST_RPC_URL'] || mstDefaults.rpcUrl,
+  explorerUrl: env['VITE_MST_EXPLORER_URL'] || env['MST_EXPLORER_URL'] || mstDefaults.explorerUrl,
+  registryAddress: env['VITE_MST_CREDENTIAL_REGISTRY_ADDRESS'] || env['MST_CREDENTIAL_REGISTRY_ADDRESS'] || mstDefaults.registryAddress,
+  faucetUrl: env['VITE_MST_FAUCET_URL'] || env['MST_FAUCET_URL'] || mstDefaults.faucetUrl,
+  minNativeBalance: env['VITE_MST_MIN_NATIVE_BALANCE'] || env['MST_MIN_NATIVE_BALANCE'] || mstDefaults.minNativeBalance,
+};
+
 export interface WalletState {
   address: string | null;
   chainId: string | null;
@@ -20,23 +41,20 @@ export const registryAbi = [
 ];
 
 export const mstChain = {
-  chainId: import.meta.env.VITE_MST_CHAIN_ID || null,
-  chainName: import.meta.env.VITE_MST_NETWORK_NAME || '',
+  chainId: resolvedMstConfig.chainId,
+  chainName: resolvedMstConfig.chainName,
   nativeCurrency: { name: 'MST', symbol: 'MST', decimals: 18 },
-  rpcUrls: import.meta.env.VITE_MST_RPC_URL ? [import.meta.env.VITE_MST_RPC_URL] : [],
-  blockExplorerUrls: import.meta.env.VITE_MST_EXPLORER_URL ? [import.meta.env.VITE_MST_EXPLORER_URL] : [],
+  rpcUrls: [resolvedMstConfig.rpcUrl],
+  blockExplorerUrls: [resolvedMstConfig.explorerUrl],
 };
 
-export const mstFaucetUrl = import.meta.env.VITE_MST_FAUCET_URL || '';
-export const minimumNativeBalance = import.meta.env.VITE_MST_MIN_NATIVE_BALANCE || '0.001';
+export const mstFaucetUrl = resolvedMstConfig.faucetUrl;
+export const minimumNativeBalance = resolvedMstConfig.minNativeBalance;
 
 export function walletConfigurationError(): string | null {
   const required = [
-    ['VITE_MST_CHAIN_ID', mstChain.chainId],
-    ['VITE_MST_NETWORK_NAME', mstChain.chainName],
-    ['VITE_MST_RPC_URL', import.meta.env.VITE_MST_RPC_URL],
-    ['VITE_MST_EXPLORER_URL', import.meta.env.VITE_MST_EXPLORER_URL],
-    ['VITE_MST_CREDENTIAL_REGISTRY_ADDRESS', import.meta.env.VITE_MST_CREDENTIAL_REGISTRY_ADDRESS],
+    ['VITE_MST_CHAIN_ID', resolvedMstConfig.chainId],
+    ['VITE_MST_RPC_URL', resolvedMstConfig.rpcUrl],
   ].find(([, value]) => !value);
   if (required) return `MST wallet configuration is incomplete: ${required[0]} is missing. Add it to the build environment and redeploy.`;
   return null;
@@ -71,7 +89,7 @@ export function getRegistryContract(provider: BrowserProvider, address: string):
 
 export async function submitUserTransaction(type: string, action: (contract: any) => Promise<any>): Promise<string> {
   const injected = getWalletProvider();
-  const registryAddress = import.meta.env.VITE_MST_CREDENTIAL_REGISTRY_ADDRESS;
+  const registryAddress = resolvedMstConfig.registryAddress;
   const configurationError = walletConfigurationError();
   if (configurationError) throw new Error(configurationError);
   if (!injected) throw new Error('Connect a wallet before signing a transaction');
