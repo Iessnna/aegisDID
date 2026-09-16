@@ -11,10 +11,14 @@ async function main() {
   const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
   const password = process.env.ADMIN_PASSWORD;
   if (!email || !password || password.length < 10) throw new Error('ADMIN_EMAIL and ADMIN_PASSWORD (10+ characters) are required');
-  const existing = db.select({ id: users.id }).from(users).where(eq(users.email, email)).get();
-  if (existing) { console.log(`Admin seed skipped; ${email} already exists.`); return; }
   const salt = randomBytes(16);
   const passwordHash = (await scrypt(password, salt, 64) as Buffer).toString('base64');
+  const existing = db.select({ id: users.id }).from(users).where(eq(users.email, email)).get();
+  if (existing) {
+    db.update(users).set({ passwordSalt: salt.toString('base64'), passwordHash, role: 'admin', revoked: false, revokedAt: null }).where(eq(users.id, existing.id)).run();
+    console.log(`Admin account credentials synchronized for ${email}.`);
+    return;
+  }
   db.insert(users).values({ id: `admin_${randomBytes(12).toString('hex')}`, email, passwordSalt: salt.toString('base64'), passwordHash, role: 'admin', createdAt: new Date().toISOString(), revoked: false }).run();
   console.log(`Admin account seeded for ${email}.`);
 }
