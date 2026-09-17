@@ -10,6 +10,13 @@ export interface GraphDataset {
   edges: TrustEdge[];
 }
 
+export function generateEmptyIdentityGraph(userDid: string): GraphDataset {
+  return {
+    nodes: [{ id: userDid, label: 'You (Self-Sovereign Identity)', avatarSeed: userDid, trustScore: 0, type: 'current_user', createdAt: new Date().toISOString(), credentialCount: 0, inDegree: 0, outDegree: 0, eigenTrust: 0, clusterId: 0, isSybilSuspect: false, x: 400, y: 280 }],
+    edges: [],
+  };
+}
+
 export function generateInitialIdentityGraph(userDid: string): GraphDataset {
   const nodes: IdentityNode[] = [];
   const edges: TrustEdge[] = [];

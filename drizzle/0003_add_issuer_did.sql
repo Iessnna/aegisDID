@@ -1,0 +1,1 @@
+ALTER TABLE `credentials` ADD `issuer_did` text NOT NULL DEFAULT '';

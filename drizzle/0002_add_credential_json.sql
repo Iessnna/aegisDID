@@ -1,0 +1,1 @@
+ALTER TABLE `credentials` ADD `credential_json` text NOT NULL DEFAULT '{}';

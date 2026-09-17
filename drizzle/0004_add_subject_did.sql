@@ -1,0 +1,1 @@
+ALTER TABLE `credentials` ADD `subject_did` text NOT NULL DEFAULT '';

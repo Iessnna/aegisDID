@@ -30,6 +30,7 @@ export const DIDWalletView: React.FC<DIDWalletViewProps> = ({
   walletAddress,
   canWriteOnChain,
 }) => {
+  const isLocalDemoCredential = (cred: VerifiableCredential) => cred.issuer.id.includes('local-') || cred.issuer.id.includes('gov-eu') || cred.issuer.id.includes('stanford-id') || cred.issuer.id.includes('gitcoin-passport') || cred.issuer.id.includes('proof-humanity');
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [showDIDDoc, setShowDIDDoc] = useState(false);
   const [selectedCred, setSelectedCred] = useState<VerifiableCredential | null>(null);
@@ -177,7 +178,7 @@ export const DIDWalletView: React.FC<DIDWalletViewProps> = ({
               <Key className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-white">Cryptographic Root Identity</h3>
+                <h3 className="text-sm font-semibold text-white">Cryptographic Root Identity</h3>
               <p className="text-xs text-slate-400">W3C Decentralized Identifier & ECDSA P-256 Public Key</p>
             </div>
           </div>
@@ -257,6 +258,7 @@ export const DIDWalletView: React.FC<DIDWalletViewProps> = ({
             Cryptographically Signed & ZK Enabled
           </span>
         </div>
+        {credentials.some(isLocalDemoCredential) && <p className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">Local demo credentials are ready for testing the ZK Apps flow. They are cryptographically valid test fixtures, not government-issued documents or official attestations.</p>}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {credentials.map(cred => {
@@ -285,9 +287,9 @@ export const DIDWalletView: React.FC<DIDWalletViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-800/60 text-emerald-300 text-[10px] font-mono">
+                  <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-mono ${isLocalDemoCredential(cred) ? 'bg-amber-950/60 border-amber-800/60 text-amber-300' : 'bg-emerald-950/80 border-emerald-800/60 text-emerald-300'}`}>
                     <CheckCircle2 className="w-3 h-3" />
-                    <span>Trust {cred.issuer.trustScore}%</span>
+                    <span>{isLocalDemoCredential(cred) ? 'Local demo fixture' : `Issuer trust ${cred.issuer.trustScore}%`}</span>
                   </div>
                 </div>
 
@@ -401,7 +403,7 @@ export const DIDWalletView: React.FC<DIDWalletViewProps> = ({
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <div className="flex items-center gap-2">
                 <Award className="w-5 h-5 text-cyan-400" />
-                <h3 className="text-base font-bold text-white">Issue Custom Verifiable Credential</h3>
+                <h3 className="text-base font-bold text-white">Create Local Test Credential</h3>
               </div>
               <button
                 onClick={() => setIsIssuingModalOpen(false)}
@@ -425,13 +427,13 @@ export const DIDWalletView: React.FC<DIDWalletViewProps> = ({
               </div>
 
               <div>
-                <label className="block text-slate-300 font-medium mb-1">Trusted Issuer Authority</label>
+                <label className="block text-slate-300 font-medium mb-1">Demo issuer label</label>
                 <input
                   type="text"
                   value={newIssuerName}
                   onChange={e => setNewIssuerName(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-cyan-500 focus:outline-none"
-                  placeholder="e.g. Global Identity Gateway"
+                  placeholder="e.g. Local test issuer"
                   required
                 />
               </div>
@@ -487,7 +489,7 @@ export const DIDWalletView: React.FC<DIDWalletViewProps> = ({
                   className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold shadow-lg shadow-cyan-500/20"
                 >
                   {isIssuingLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Award className="w-4 h-4" />}
-                  <span>Sign & Mint to Vault</span>
+                  <span>Sign local test credential</span>
                 </button>
               </div>
             </form>

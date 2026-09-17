@@ -132,6 +132,57 @@ export async function verifySignature(
   }
 }
 
+export interface DocumentProof {
+  version: 1;
+  documentHash: string;
+  documentType: string;
+  issuer: string;
+  holderDid: string;
+  issuedAt: string;
+  signature: string;
+  publicKeyJwk: JsonWebKey;
+}
+
+export async function encryptDocumentLocally(data: ArrayBuffer, privateKey: CryptoKey): Promise<{ iv: ArrayBuffer; ciphertext: ArrayBuffer }> {
+  const privateKeyJwk = await crypto.subtle.exportKey('jwk', privateKey);
+  const keyMaterial = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(privateKeyJwk)));
+  const encryptionKey = await crypto.subtle.importKey('raw', keyMaterial, { name: 'AES-GCM' }, false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, encryptionKey, data);
+  return { iv: iv.buffer, ciphertext };
+}
+
+export async function createDocumentProof(params: {
+  documentHash: string;
+  documentType: string;
+  holderDid: string;
+  privateKey: CryptoKey;
+  publicKeyJwk: JsonWebKey;
+}): Promise<DocumentProof> {
+  const issuedAt = new Date().toISOString();
+  const payload = `${params.documentHash}|${params.documentType}|${params.holderDid}|${issuedAt}`;
+  return {
+    version: 1,
+    documentHash: params.documentHash,
+    documentType: params.documentType,
+    issuer: 'AegisDID local document vault',
+    holderDid: params.holderDid,
+    issuedAt,
+    signature: await signMessage(payload, params.privateKey),
+    publicKeyJwk: params.publicKeyJwk,
+  };
+}
+
+export async function verifyDocumentProof(proof: DocumentProof): Promise<boolean> {
+  if (!proof || proof.version !== 1 || !proof.documentHash || !proof.holderDid || !proof.signature || !proof.publicKeyJwk) return false;
+  const publicKey = await importPublicKeyFromJwk(proof.publicKeyJwk);
+  const rawPublicKey = await crypto.subtle.exportKey('raw', publicKey);
+  const derivedDid = `did:aegis:0x${(await sha256(bufferToHex(rawPublicKey))).substring(0, 32)}`;
+  if (derivedDid !== proof.holderDid) return false;
+  const payload = `${proof.documentHash}|${proof.documentType}|${proof.holderDid}|${proof.issuedAt}`;
+  return verifySignature(payload, proof.signature, publicKey);
+}
+
 // Import CryptoKey from JWK
 export async function importPublicKeyFromJwk(jwk: JsonWebKey): Promise<CryptoKey> {
   return await crypto.subtle.importKey(

@@ -173,6 +173,16 @@ export const VerifiablePresentationModal: React.FC<VerifiablePresentationModalPr
                     </div>
                   ))}
                 </div>
+                {matchingCredential && Object.entries(matchingCredential.credentialSubject).filter(([key]) => key !== 'id').map(([key]) => {
+                  const toggleKey = `${matchingCredential.id}:${key}`;
+                  const isRevealed = Boolean(revealedClaimToggles[toggleKey]);
+                  return (
+                    <button key={key} type="button" onClick={() => handleToggleClaim(toggleKey)} className={`flex w-full items-center justify-between rounded-lg border p-2 text-left ${isRevealed ? 'border-amber-400/40 bg-amber-400/10' : 'border-slate-800 bg-slate-900'}`}>
+                      <span className="flex items-center gap-2"><span className="text-slate-400">{isRevealed ? <Eye className="h-3.5 w-3.5 text-amber-300" /> : <EyeOff className="h-3.5 w-3.5 text-slate-500" />}</span><span><span className="block text-slate-200">{key}</span><span className="text-[10px] text-slate-500">Optional raw disclosure</span></span></span>
+                      <span className={`text-[10px] font-mono ${isRevealed ? 'text-amber-300' : 'text-slate-500'}`}>{isRevealed ? 'REVEAL' : 'HIDDEN'}</span>
+                    </button>
+                  );
+                })}
                     </>
                   );
                 })()}

@@ -46,6 +46,10 @@ export const credentials = sqliteTable('credentials', {
   expirationDate: text('expiration_date'),
   anchorTxHash: text('anchor_tx_hash'),
   revoked: integer('revoked', { mode: 'boolean' }).notNull().default(false),
+  credentialJson: text('credential_json').notNull().default('{}'),
+  issuerDid: text('issuer_did').notNull().default(''),
+  subjectDid: text('subject_did').notNull().default(''),
+  credentialType: text('credential_type').notNull().default(''),
 }, table => ({ userIndex: index('credentials_user_id_idx').on(table.userId), credentialUnique: uniqueIndex('credentials_credential_id_unique').on(table.credentialId) }));
 
 export const adminAuditLog = sqliteTable('admin_audit_log', {
@@ -86,4 +90,15 @@ export const notifications = sqliteTable('notifications', {
   readAt: text('read_at'),
 }, table => ({ userIndex: index('notifications_user_id_idx').on(table.userId), createdIndex: index('notifications_created_at_idx').on(table.createdAt), unreadIndex: index('notifications_read_at_idx').on(table.readAt) }));
 
-export const schema = { users, apiKeys, transactions, credentials, adminAuditLog, sessions, spentChallenges, fraudFlags, notifications };
+export const integrationRequests = sqliteTable('integration_requests', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  apiKeyId: text('api_key_id').references(() => apiKeys.id, { onDelete: 'set null' }),
+  audience: text('audience').notNull(),
+  requestType: text('request_type').notNull(),
+  status: text('status').notNull(),
+  holderDid: text('holder_did'),
+  createdAt: timestamps(),
+}, table => ({ userIndex: index('integration_requests_user_id_idx').on(table.userId), createdIndex: index('integration_requests_created_at_idx').on(table.createdAt) }));
+
+export const schema = { users, apiKeys, transactions, credentials, adminAuditLog, sessions, spentChallenges, fraudFlags, notifications, integrationRequests };

@@ -87,11 +87,15 @@ Returns `204` when the key belongs to the authenticated user.
 
 Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before the first server start to seed one admin account. Admin routes are under `/api/admin/*` and require the authenticated session role.
 
+Credential verification also requires the issuer DID and public JWK to be registered in the server-only `AEGIS_TRUSTED_ISSUERS_JSON` environment variable. The server never treats a user-supplied issuer key as authoritative. Example shape: `{"did:aegis:issuer:example":{"kty":"EC","crv":"P-256","x":"...","y":"..."}}`.
+
 The updated `contracts/AegisCredentialRegistry.sol` is deployed on MST testnet at `0x8ea34e36670557A552c25F37A81b895Ca0535F6c`. DID registration, credential anchoring, and audit logging are public wallet-signed writes; only revocation and caller authorization are owner-only. The deployment script is `npm run deploy:registry`.
 
 ## Public presentation verification
 
 `POST /api/public/verify-presentation` is unauthenticated, CORS-enabled, and rate-limited by IP. It reuses the server's cryptographic presentation checks and returns the holder DID, valid revealed claims, and verification time.
+
+Include `Authorization: Bearer aegis_live_...` when calling this endpoint to attribute the request to the API-key owner. It will then appear in that account's ZK Apps integration activity. Anonymous checks remain public but cannot be attributed to an account.
 
 ```bash
 curl -X POST http://localhost:3000/api/public/verify-presentation \
@@ -100,6 +104,8 @@ curl -X POST http://localhost:3000/api/public/verify-presentation \
 ```
 
 ## Integrate AegisDID on your site
+
+This project includes a working verifier example at `/demo-verifier.html`. Open `http://localhost:3000/demo-verifier.html` while the dev server is running to test the complete widget callback flow.
 
 Load the hosted widget once and add a button with a credential requirement. Multiple requirements are comma-separated. The popup always asks the user to approve, verifies the redacted presentation server-side, and sends the result only back to the requesting origin.
 
@@ -141,6 +147,25 @@ Content-Type: application/json
 ```
 
 Returns a `FraudAnalysisResult` containing `humanityScore`, `botProbability`, `decision`, anomalies, reasons, and an audit signature.
+
+### Integration activity
+
+```http
+GET /api/integrations/activity
+```
+
+Requires the account session cookie. Returns recent API and verifier requests for that account without document contents or API secrets.
+
+### Issue a verifier session
+
+```http
+POST /api/verifier/sessions
+Content-Type: application/json
+
+{"audience":"https://your-site.example","holderDid":"did:aegis:0x..."}
+```
+
+Requires the account session cookie. Returns a server-generated token bound to the HTTPS audience and valid for five minutes.
 
 ### Network audit
 

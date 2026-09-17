@@ -1,5 +1,17 @@
 import { KeyPairData, VerifiableCredential } from '../types';
 
+export interface StoredDocument {
+  id: string;
+  name: string;
+  documentType: string;
+  documentHash: string;
+  uploadedAt: string;
+  encryptedData: ArrayBuffer;
+  iv: ArrayBuffer;
+  proof: import('./crypto').DocumentProof;
+  revoked: boolean;
+}
+
 interface StoredIdentity {
   keyPairData: KeyPairData;
   credentials: VerifiableCredential[];
@@ -12,12 +24,16 @@ interface StoredEnvelope {
 
 const databaseName = 'aegisdid-vault';
 const storeName = 'identity';
+const documentsStoreName = 'documents';
 const identityKey = 'current';
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(databaseName, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore(storeName);
+    const request = indexedDB.open(databaseName, 2);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(storeName)) request.result.createObjectStore(storeName);
+      if (!request.result.objectStoreNames.contains(documentsStoreName)) request.result.createObjectStore(documentsStoreName, { keyPath: 'id' });
+    };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
@@ -75,6 +91,40 @@ export async function clearIdentity(): Promise<void> {
   const database = await openDatabase();
   await new Promise<void>((resolve, reject) => {
     const request = database.transaction(storeName, 'readwrite').objectStore(storeName).delete(identityKey);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+  database.close();
+}
+
+export async function saveDocument(document: StoredDocument): Promise<void> {
+  if (typeof indexedDB === 'undefined') return;
+  const database = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const request = database.transaction(documentsStoreName, 'readwrite').objectStore(documentsStoreName).put(document);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+  database.close();
+}
+
+export async function loadDocuments(): Promise<StoredDocument[]> {
+  if (typeof indexedDB === 'undefined') return [];
+  const database = await openDatabase();
+  const documents = await new Promise<StoredDocument[]>((resolve, reject) => {
+    const request = database.transaction(documentsStoreName, 'readonly').objectStore(documentsStoreName).getAll();
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error);
+  });
+  database.close();
+  return documents;
+}
+
+export async function deleteDocument(id: string): Promise<void> {
+  if (typeof indexedDB === 'undefined') return;
+  const database = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const request = database.transaction(documentsStoreName, 'readwrite').objectStore(documentsStoreName).delete(id);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });

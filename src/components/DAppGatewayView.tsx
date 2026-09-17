@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   ShieldCheck, Coins, Vote, Sparkles, CheckCircle2, Lock, 
   ArrowRight, ExternalLink, Key, Award, AlertCircle, FileCheck, Check
@@ -34,6 +34,20 @@ export const DAppGatewayView: React.FC<DAppGatewayViewProps> = ({
     token: string;
     timestamp: string;
   } | null>(null);
+  const [integrationActivity, setIntegrationActivity] = useState<{ id: string; audience: string; requestType: string; status: string; createdAt: string }[]>([]);
+
+  const loadIntegrationActivity = async () => {
+    const response = await fetch('/api/integrations/activity', { credentials: 'include' });
+    if (!response.ok) return;
+    const data = await response.json();
+    setIntegrationActivity(data.requests || []);
+  };
+
+  useEffect(() => {
+    void loadIntegrationActivity().catch(() => undefined);
+    const interval = window.setInterval(() => { void loadIntegrationActivity().catch(() => undefined); }, 5000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const dapps: DAppVerificationRequest[] = [
     {
@@ -142,7 +156,10 @@ export const DAppGatewayView: React.FC<DAppGatewayViewProps> = ({
         });
       } catch (_) {}
 
-      const token = `zksess_${Math.random().toString(36).substring(2, 15)}_${Date.now()}`;
+      const sessionResponse = await fetch('/api/verifier/sessions', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audience: selectedDapp.dappId, holderDid: presentation.holder }) });
+      const sessionData = await sessionResponse.json();
+      if (!sessionResponse.ok || typeof sessionData.token !== 'string') throw new Error(sessionData.error || 'The verifier session could not be issued');
+      const token = sessionData.token as string;
       setVerifiedDapps(prev => ({
         ...prev,
         [selectedDapp.dappId]: {
@@ -158,6 +175,7 @@ export const DAppGatewayView: React.FC<DAppGatewayViewProps> = ({
         token,
         timestamp: new Date().toISOString(),
       });
+      void loadIntegrationActivity();
     }
   };
 
@@ -173,10 +191,13 @@ export const DAppGatewayView: React.FC<DAppGatewayViewProps> = ({
             <h2 className="text-base font-semibold text-white">Zero-KYC Verifier Gateway</h2>
           </div>
           <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-            Example verifier requests for integration testing. External sites receive redacted credentials plus issuer-signed predicate attestations, not the underlying claim values.
+            Registered verifier examples receive redacted credentials plus issuer-signed predicate attestations, not underlying claim values. Successful checks create short-lived, audience-bound sessions on the server.
           </p>
+          <a href="/demo-verifier.html" target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 text-xs font-semibold text-cyan-300 hover:text-white"><ExternalLink className="h-3.5 w-3.5" />Open connected demo verifier website</a>
         </div>
       </div>
+
+      <section className="aegis-panel rounded-2xl border-cyan-400/20 p-5"><div className="flex items-center justify-between"><div><p className="text-[10px] uppercase tracking-[0.2em] text-cyan-300">INTEGRATION ACTIVITY</p><h3 className="mt-1 text-lg font-semibold text-white">Your API and verifier requests</h3></div><button onClick={() => void loadIntegrationActivity()} className="text-xs text-cyan-300 hover:text-white">Refresh</button></div><p className="mt-2 text-xs text-slate-400">Only requests made by your signed-in AegisDID session or your API keys appear here. Anonymous public checks are not assigned to an account.</p>{integrationActivity.length === 0 ? <p className="mt-4 text-xs text-slate-500">No requests for this account yet. Sign in before approving a tester request.</p> : <div className="mt-4 space-y-2">{integrationActivity.slice(0, 12).map(request => <div key={request.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-2 text-xs"><span className="font-mono text-cyan-200">{request.requestType}</span><span className="text-slate-400">{request.audience}</span><span className={request.status === 'issued' || request.status === 'verified' ? 'text-emerald-300' : 'text-slate-500'}>{request.status}</span><time className="text-slate-600">{new Date(request.createdAt).toLocaleString()}</time></div>)}</div>}</section>
 
       {/* DApp Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -277,7 +298,7 @@ export const DAppGatewayView: React.FC<DAppGatewayViewProps> = ({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-emerald-400 text-sm font-bold">
               <CheckCircle2 className="w-5 h-5" />
-              <span>Zero-KYC Access Token Granted: {activeReceipt.dappName}</span>
+              <span>Local verification receipt: {activeReceipt.dappName}</span>
             </div>
             <button
               onClick={() => setActiveReceipt(null)}

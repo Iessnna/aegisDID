@@ -9,6 +9,7 @@ import React, { lazy, Suspense, useState, useEffect, useCallback } from 'react';
 import { Navbar } from './components/Navbar';
 import { AuthPanel } from './components/AuthPanel';
 import { ExternalVerificationView } from './components/ExternalVerificationView';
+import { DocumentVaultView } from './components/DocumentVaultView';
 import { NotificationsView } from './components/NotificationsView';
 import { 
   KeyPairData, DIDDocument, VerifiableCredential, BehavioralTelemetry, 
@@ -22,7 +23,7 @@ import {
   globalBehavioralCollector 
 } from './lib/behavioralBiometrics';
 import { 
-  generateInitialIdentityGraph, GraphDataset 
+  generateEmptyIdentityGraph, GraphDataset
 } from './lib/networkGraph';
 
 const DIDWalletView = lazy(() => import('./components/DIDWalletView').then(module => ({ default: module.DIDWalletView })));
@@ -40,7 +41,7 @@ const LoadingSpinner = () => (
 );
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'wallet' | 'behavioral' | 'network' | 'dapps' | 'lab' | 'transactions' | 'notifications' | 'admin'>('wallet');
+  const [activeTab, setActiveTab] = useState<'wallet' | 'documents' | 'behavioral' | 'network' | 'dapps' | 'lab' | 'transactions' | 'notifications' | 'admin'>('wallet');
   const [userRole, setUserRole] = useState<'user' | 'admin'>('user');
   
   // Cryptographic DID & Keys
@@ -65,12 +66,16 @@ export default function App() {
   const [graphData, setGraphData] = useState<GraphDataset>({ nodes: [], edges: [] });
   const [networkAuditSummary, setNetworkAuditSummary] = useState<string | null>(null);
   const [isAuditing, setIsAuditing] = useState<boolean>(false);
+  const isLocalFixture = (credential: VerifiableCredential) => {
+    const issuerId = credential.issuer.id;
+    return issuerId.includes('local-') || issuerId.includes('gov-eu') || issuerId.includes('stanford-id') || issuerId.includes('gitcoin-passport') || issuerId.includes('proof-humanity');
+  };
 
   // Initialize Decentralized Identity on Mount
   const initializeIdentity = useCallback(async () => {
     try {
       const savedIdentity = await loadIdentity();
-      if (savedIdentity && savedIdentity.credentials.length > 0 && savedIdentity.credentials.every(credential => credential.proof.publicKeyJwk)) {
+      if (savedIdentity && savedIdentity.keyPairData.privateKeyJwk && savedIdentity.credentials.length > 0 && savedIdentity.credentials.every(credential => credential.proof.publicKeyJwk)) {
         const restoredPrivateKey = savedIdentity.keyPairData.privateKeyJwk
           ? await importPrivateKeyFromJwk(savedIdentity.keyPairData.privateKeyJwk)
           : null;
@@ -82,7 +87,8 @@ export default function App() {
           setCryptoKeyPair(restoredKeyPair);
           setDidDocument(createDIDDocument(savedIdentity.keyPairData.keyId.split('#')[0], savedIdentity.keyPairData));
           setCredentials(savedIdentity.credentials);
-          setGraphData(generateInitialIdentityGraph(savedIdentity.keyPairData.keyId.split('#')[0]));
+          setGraphData(generateEmptyIdentityGraph(savedIdentity.keyPairData.keyId.split('#')[0]));
+          void loadRealGraph(savedIdentity.keyPairData.keyId.split('#')[0]);
           globalBehavioralCollector.startListening();
           return;
         }
@@ -96,7 +102,7 @@ export default function App() {
       const doc = createDIDDocument(did, data);
       setDidDocument(doc);
 
-      // Create an ephemeral issuer authority key for mock trusted roots
+      // Seed clearly labeled local fixtures so the workspace has data on first load.
       const issuerAuthorityKeys = await crypto.subtle.generateKey(
         { name: 'ECDSA', namedCurve: 'P-256' },
         true,
@@ -105,8 +111,8 @@ export default function App() {
 
       // 1. Proof of Humanity Credential
       const humanityVC = await issueVerifiableCredential({
-        issuerName: 'Humanity Council Biometric DAO',
-        issuerDid: 'did:aegis:issuer:proof-humanity',
+        issuerName: 'AegisDID local demo issuer',
+        issuerDid: 'did:aegis:issuer:local-humanity-demo',
         issuerPrivateKey: issuerAuthorityKeys.privateKey,
         issuerPublicKey: issuerAuthorityKeys.publicKey,
         issuerTrustScore: 95,
@@ -129,8 +135,8 @@ export default function App() {
 
       // 2. Government Age Gate Credential
       const ageVC = await issueVerifiableCredential({
-        issuerName: 'Estonia e-Residency DID Gateway',
-        issuerDid: 'did:aegis:issuer:gov-eu',
+        issuerName: 'AegisDID local age demo',
+        issuerDid: 'did:aegis:issuer:local-age-demo',
         issuerPrivateKey: issuerAuthorityKeys.privateKey,
         issuerPublicKey: issuerAuthorityKeys.publicKey,
         issuerTrustScore: 99,
@@ -154,8 +160,8 @@ export default function App() {
 
       // 3. Web3 Trust & Sybil Resistance Credential
       const gitcoinVC = await issueVerifiableCredential({
-        issuerName: 'Gitcoin Web3 Trust Oracle',
-        issuerDid: 'did:aegis:issuer:gitcoin-passport',
+        issuerName: 'AegisDID local trust demo',
+        issuerDid: 'did:aegis:issuer:local-trust-demo',
         issuerPrivateKey: issuerAuthorityKeys.privateKey,
         issuerPublicKey: issuerAuthorityKeys.publicKey,
         issuerTrustScore: 92,
@@ -179,8 +185,8 @@ export default function App() {
 
       // 4. Stanford Cryptography Accreditation
       const stanfordVC = await issueVerifiableCredential({
-        issuerName: 'Stanford Cryptography Lab',
-        issuerDid: 'did:aegis:issuer:stanford-id',
+        issuerName: 'AegisDID local accreditation demo',
+        issuerDid: 'did:aegis:issuer:local-accreditation-demo',
         issuerPrivateKey: issuerAuthorityKeys.privateKey,
         issuerPublicKey: issuerAuthorityKeys.publicKey,
         issuerTrustScore: 97,
@@ -201,12 +207,13 @@ export default function App() {
         ],
       });
 
+      // These are explicitly labeled local fixtures for testing the presentation flow.
       setCredentials([humanityVC, ageVC, gitcoinVC, stanfordVC]);
       await saveIdentity({ keyPairData: data, credentials: [humanityVC, ageVC, gitcoinVC, stanfordVC] });
 
-      // Initialize Identity Trust Graph
-      const initialGraph = generateInitialIdentityGraph(did);
-      setGraphData(initialGraph);
+      // Initialize a truthful local graph until an authenticated backend graph is available.
+      setGraphData(generateEmptyIdentityGraph(did));
+      void loadRealGraph(did);
 
       // Start Behavioral Biometrics Passive Listener
       globalBehavioralCollector.startListening();
@@ -214,6 +221,18 @@ export default function App() {
       console.error('Failed to initialize decentralized identity:', err);
     }
   }, []);
+
+  const loadRealGraph = async (did: string) => {
+    try {
+      await fetch('/api/auth/did', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ did }) });
+      const response = await fetch('/api/network/graph', { credentials: 'include' });
+      if (!response.ok) return;
+      const data = await response.json() as GraphDataset;
+      if (data.nodes.length > 0) setGraphData(data);
+    } catch {
+      // The graph remains a truthful local identity node when no account is signed in.
+    }
+  };
 
   const rotateIdentity = useCallback(async () => {
     await clearIdentity();
@@ -248,9 +267,16 @@ export default function App() {
   const buildLocalAnalysis = (customTelemetry: BehavioralTelemetry, attackType?: string): FraudAnalysisResult => {
     const isBotSimulation = attackType === 'linear_bot' || attackType === 'instant_replay' || attackType === 'stolen_keys' || attackType === 'replay_attack';
     const isSybil = attackType === 'sybil_ring';
-    const botProbability = isSybil ? 92 : isBotSimulation ? 88 : 5;
+    const hasEnoughTelemetry = customTelemetry.eventsCount >= 5;
+    const telemetryBotSignals = [
+      customTelemetry.clientSignals.webdriverPresent || customTelemetry.clientSignals.automatedFlags ? 45 : 0,
+      customTelemetry.trajectoryLinearityScore > 0.92 ? 25 : 0,
+      customTelemetry.jitterVariance < 1 ? 15 : 0,
+      customTelemetry.dwellTimeMean > 0 && customTelemetry.dwellTimeMean < 15 ? 15 : 0,
+    ].reduce((total, signal) => total + signal, 0);
+    const botProbability = isSybil ? 92 : isBotSimulation ? 88 : hasEnoughTelemetry ? Math.min(99, telemetryBotSignals) : 50;
     const humanityScore = 100 - botProbability;
-    const decision = isSybil ? 'SYBIL_DETECTED' : isBotSimulation ? 'FLAGGED_BOT' : 'VERIFIED_HUMAN';
+    const decision = isSybil ? 'SYBIL_DETECTED' : isBotSimulation ? 'FLAGGED_BOT' : !hasEnoughTelemetry ? 'CHALLENGE_REQUIRED' : botProbability >= 70 ? 'FLAGGED_BOT' : 'VERIFIED_HUMAN';
 
     return {
       humanityScore,
@@ -259,10 +285,10 @@ export default function App() {
       sybilCollusionRisk: isSybil ? 92 : 8,
       credentialReplayRisk: attackType === 'replay_attack' ? 95 : 3,
       decision,
-      riskCategory: botProbability >= 70 ? 'CRITICAL' : 'LOW',
+      riskCategory: botProbability >= 70 ? 'CRITICAL' : botProbability >= 35 ? 'MEDIUM' : 'LOW',
       reasons: isBotSimulation || isSybil
         ? ['Synthetic attack vector detected by the local rules engine.', 'Behavioral and graph signals do not match the holder profile.']
-        : ['Organic interaction signals are within the expected human range.', 'Zero-knowledge predicates are ready for verification.'],
+        : !hasEnoughTelemetry ? ['Not enough interaction telemetry was collected to make a confident decision.', 'Continue interacting and run the audit again.'] : ['Observed interaction signals were evaluated by the local rules engine.', 'Zero-knowledge predicates are ready for verification.'],
       anomaliesDetected: isBotSimulation || isSybil ? [{
         type: isSybil ? 'SYBIL_CLUSTER_TOPOLOGY' : 'AUTOMATION_SIGNATURE',
         severity: 'high',
@@ -468,6 +494,10 @@ export default function App() {
     setCredentials(prev => {
       const updatedCredentials = [newCred, ...prev];
       if (keyPairData) void saveIdentity({ keyPairData, credentials: updatedCredentials });
+      void fetch('/api/credentials', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newCred) }).then(async response => {
+        if (!response.ok) console.warn('Credential was kept locally but not registered on the account:', await response.text());
+        else void loadRealGraph(userDid);
+      }).catch(() => console.warn('Credential was kept locally but the account service was unavailable.'));
       return updatedCredentials;
     });
   };
@@ -475,6 +505,7 @@ export default function App() {
   const humanityScore = latestAiAnalysis?.humanityScore ?? 95;
   const workspaceMeta = {
     wallet: { eyebrow: 'IDENTITY CONTROL PLANE', title: 'Your identity, held by you', detail: 'Credentials, keys, and selective disclosure in one private workspace.' },
+    documents: { eyebrow: 'PRIVATE DOCUMENT VAULT', title: 'Prove the document without sharing it', detail: 'Encrypt government-issued documents locally, then share only a signed proof with teachers, HR, or other verifiers.' },
     behavioral: { eyebrow: 'LIVE TRUST SIGNALS', title: 'Verify the human behind the key', detail: 'Continuous behavioral signals make automation visible without collecting identity data.' },
     network: { eyebrow: 'TRUST GRAPH', title: 'See trust move through the network', detail: 'Inspect issuer relationships and isolate collusion before it scales.' },
     dapps: { eyebrow: 'VERIFIER GATEWAY', title: 'Access without exposing yourself', detail: 'Turn verified credentials into audience-bound, zero-knowledge sessions.' },
@@ -553,6 +584,15 @@ export default function App() {
               walletAddress={wallet.address}
               canWriteOnChain={Boolean(wallet.address && !isWrongNetwork && !hasInsufficientBalance && !walletConfigurationError)}
             /></Suspense>
+        )}
+
+        {activeTab === 'documents' && (
+          <DocumentVaultView
+            userDid={userDid}
+            keyPairData={keyPairData}
+            privateKey={cryptoKeyPair?.privateKey || null}
+            walletReady={Boolean(wallet.address && !isWrongNetwork && !hasInsufficientBalance && !walletConfigurationError)}
+          />
         )}
 
         {activeTab === 'behavioral' && (

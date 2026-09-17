@@ -1,0 +1,1 @@
+ALTER TABLE `credentials` ADD `credential_type` text NOT NULL DEFAULT '';

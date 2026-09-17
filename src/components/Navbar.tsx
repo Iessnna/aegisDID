@@ -1,10 +1,10 @@
 import React from 'react';
-import { Shield, Fingerprint, Network, Cpu, FlaskConical, Wallet, Bell, Copy, Check, Menu, X, ExternalLink, LogOut } from 'lucide-react';
+import { Shield, Fingerprint, Network, Cpu, FlaskConical, Wallet, Bell, Copy, Check, Menu, X, ExternalLink, LogOut, Files } from 'lucide-react';
 import { mstChain } from '../lib/wallet';
 
 interface NavbarProps {
-  activeTab: 'wallet' | 'behavioral' | 'network' | 'dapps' | 'lab' | 'transactions' | 'notifications' | 'admin';
-  setActiveTab: (tab: 'wallet' | 'behavioral' | 'network' | 'dapps' | 'lab' | 'transactions' | 'notifications' | 'admin') => void;
+  activeTab: 'wallet' | 'documents' | 'behavioral' | 'network' | 'dapps' | 'lab' | 'transactions' | 'notifications' | 'admin';
+  setActiveTab: (tab: 'wallet' | 'documents' | 'behavioral' | 'network' | 'dapps' | 'lab' | 'transactions' | 'notifications' | 'admin') => void;
   userDid: string;
   humanityScore: number;
   isAiConnected: boolean;
@@ -61,6 +61,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const navItems = [
     { id: 'wallet', label: 'Identity', icon: Wallet, badge: 'Self-Sovereign' },
+    { id: 'documents', label: 'Document Vault', icon: Files, badge: 'Private proofs' },
     { id: 'behavioral', label: 'Human Verification', icon: Fingerprint, badge: 'Real-time' },
     { id: 'network', label: 'Trust Graph', icon: Network, badge: 'EigenTrust' },
     { id: 'dapps', label: 'Zero-Knowledge Apps', icon: Shield, badge: 'Verifier Gateway' },

@@ -24,6 +24,8 @@ services:
         value: https://testnetrpc.mstblockchain.com
       - key: MST_PRIVATE_KEY
         sync: false
+      - key: AEGIS_TRUSTED_ISSUERS_JSON
+        sync: false
       - key: MST_CREDENTIAL_REGISTRY_ADDRESS
         sync: false
       - key: VITE_MST_CHAIN_ID

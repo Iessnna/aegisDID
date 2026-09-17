@@ -11,7 +11,7 @@ import { mstAnchor } from './src/lib/mstAnchor';
 import { JsonRpcProvider, getAddress, isAddress } from 'ethers';
 import { and, count, desc, eq, isNull, lt, or } from 'drizzle-orm';
 import { db } from './src/db';
-import { adminAuditLog, apiKeys, credentials, fraudFlags, notifications, sessions, spentChallenges, transactions, users } from './src/db/schema';
+import { adminAuditLog, apiKeys, credentials, fraudFlags, integrationRequests, notifications, sessions, spentChallenges, transactions, users } from './src/db/schema';
 
 dotenv.config();
 
@@ -220,6 +220,10 @@ async function getApiKeyUser(req: Request): Promise<{ user: AuthUserRecord; rate
   return user && user.status === 'active' ? { user, rateKey: `api:${key.id}` } : null;
 }
 
+function recordIntegrationRequest(userId: string | null, apiKeyId: string | null, audience: string, requestType: string, status: string, holderDid?: string): void {
+  db.insert(integrationRequests).values({ id: `integration_${randomBytes(10).toString('hex')}`, userId, apiKeyId, audience: audience.slice(0, 300), requestType: requestType.slice(0, 80), status: status.slice(0, 40), holderDid: holderDid?.slice(0, 300) || null, createdAt: new Date().toISOString() }).run();
+}
+
 async function requireAiAccess(req: Request, res: Response): Promise<string | null> {
   const apiKeyAccess = await getApiKeyUser(req);
   if (apiKeyAccess) {
@@ -227,6 +231,8 @@ async function requireAiAccess(req: Request, res: Response): Promise<string | nu
       res.status(429).json({ error: 'AI request limit exceeded. Try again in one minute.' });
       return null;
     }
+    const apiKeyId = apiKeyAccess.rateKey.slice('api:'.length);
+    recordIntegrationRequest(apiKeyAccess.user.id, apiKeyId, String(req.body?.audience || req.path), req.path.slice('/api/'.length), 'received', typeof req.body?.presentation?.holder === 'string' ? req.body.presentation.holder : undefined);
     return apiKeyAccess.rateKey;
   }
   const sessionUser = await getAuthenticatedUser(req);
@@ -240,6 +246,7 @@ async function requireAiAccess(req: Request, res: Response): Promise<string | nu
     res.status(429).json({ error: 'AI request limit exceeded. Try again in one minute.' });
     return null;
   }
+  recordIntegrationRequest(sessionUser.id, null, String(req.body?.audience || req.path), req.path.slice('/api/'.length), 'received', typeof req.body?.presentation?.holder === 'string' ? req.body.presentation.holder : undefined);
   return rateKey;
 }
 
@@ -271,6 +278,12 @@ async function verifyCredential(credential: any, expectedSubjectDid?: string): P
   const publicKeyJwk = credential?.proof?.publicKeyJwk;
   if (!publicKeyJwk || !credential?.proof?.signatureValue || !credential?.proof?.claimHashes) return false;
   if (!credential?.issuer?.id || credential.proof.verificationMethod !== `${credential.issuer.id}#key-1`) return false;
+  const trustedIssuers = (() => {
+    try { return JSON.parse(process.env.AEGIS_TRUSTED_ISSUERS_JSON || '{}') as Record<string, JsonWebKey>; } catch { return {}; }
+  })();
+  const trustedPublicKey = trustedIssuers[credential.issuer.id];
+  const isLocalDemoIssuer = process.env.NODE_ENV !== 'production' && credential.issuer.id.startsWith('did:aegis:issuer:local-');
+  if (!isLocalDemoIssuer && (!trustedPublicKey || JSON.stringify(trustedPublicKey) !== JSON.stringify(publicKeyJwk))) return false;
   if (expectedSubjectDid && credential?.credentialSubject?.id !== expectedSubjectDid) return false;
   const expectedClaimHashes = credential.proof.claimHashes as Record<string, string>;
   for (const claim of credential.zkDisclosableClaims || []) {
@@ -433,10 +446,33 @@ app.post('/api/public/verify-presentation', publicVerificationCors, async (req: 
   if (!presentation || typeof presentation !== 'object' || !presentation.holder) return res.status(400).json({ valid: false, error: 'A VerifiablePresentation JSON body is required' });
   try {
     const valid = await verifyPresentation(presentation);
+    const sessionUser = await getAuthenticatedUser(req);
+    const apiKeyAccess = await getApiKeyUser(req);
+    if (sessionUser || apiKeyAccess) {
+      recordIntegrationRequest(sessionUser?.id || apiKeyAccess?.user.id || null, apiKeyAccess ? apiKeyAccess.rateKey.slice('api:'.length) : null, String(presentation.proof?.domain || 'public-verifier'), 'public_presentation_verification', valid ? 'verified' : 'rejected', presentation.holder);
+    }
     res.json({ valid, holderDid: presentation.holder, revealedClaims: valid ? presentation.zkProofs?.revealedClaims || {} : {}, checkedAt: new Date().toISOString() });
   } catch (error: any) {
     res.status(400).json({ valid: false, holderDid: presentation.holder, revealedClaims: {}, checkedAt: new Date().toISOString(), error: error?.message || 'Presentation verification failed' });
   }
+});
+
+app.get('/api/integrations/activity', async (req: Request, res: Response) => {
+  const user = await requireAuthenticatedUser(req, res);
+  if (!user) return;
+  const rows = db.select().from(integrationRequests).where(eq(integrationRequests.userId, user.id)).orderBy(desc(integrationRequests.createdAt)).limit(100).all();
+  res.json({ requests: rows.map(({ id, audience, requestType, status, createdAt }) => ({ id, audience, requestType, status, createdAt })) });
+});
+
+app.post('/api/verifier/sessions', async (req: Request, res: Response) => {
+  const user = await requireAuthenticatedUser(req, res);
+  if (!user) return;
+  const audience = String(req.body?.audience || '').trim();
+  const holderDid = String(req.body?.holderDid || '').trim();
+  if (!/^https?:\/\/[^\s]+$/i.test(audience) || !holderDid) return res.status(400).json({ error: 'A valid verifier audience and holder DID are required' });
+  const token = `aegis_session_${randomBytes(32).toString('base64url')}`;
+  recordIntegrationRequest(user.id, null, audience, 'verifier_session', 'issued', holderDid);
+  res.status(201).json({ token, audience, holderDid, expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString() });
 });
 
 // Account registration and session authentication. Passwords and session tokens are never stored raw.
@@ -532,6 +568,53 @@ app.post('/api/auth/wallet', async (req: Request, res: Response) => {
   if (owner) return res.status(409).json({ error: 'That wallet is already linked to another account' });
   db.update(users).set({ walletAddress: normalizedAddress, did: did || user.did }).where(eq(users.id, user.id)).run();
   res.json({ user: publicUser((await findUserById(user.id))!) });
+});
+
+app.post('/api/auth/did', async (req: Request, res: Response) => {
+  const user = await requireAuthenticatedUser(req, res);
+  if (!user) return;
+  const did = String(req.body?.did || '').trim();
+  if (!/^did:aegis:0x[a-f0-9]{32}$/i.test(did)) return res.status(400).json({ error: 'A valid AegisDID is required' });
+  const owner = db.select({ id: users.id }).from(users).where(eq(users.did, did)).all().find(candidate => candidate.id !== user.id);
+  if (owner) return res.status(409).json({ error: 'That DID is already linked to another account' });
+  db.update(users).set({ did }).where(eq(users.id, user.id)).run();
+  res.json({ user: publicUser((await findUserById(user.id))!) });
+});
+
+app.get('/api/credentials', async (req: Request, res: Response) => {
+  const user = await requireAuthenticatedUser(req, res);
+  if (!user) return;
+  const rows = db.select().from(credentials).where(eq(credentials.userId, user.id)).orderBy(desc(credentials.issuedAt)).all();
+  res.json({ credentials: rows.map(row => { try { return JSON.parse(row.credentialJson); } catch { return null; } }).filter(Boolean) });
+});
+
+app.post('/api/credentials', async (req: Request, res: Response) => {
+  const user = await requireAuthenticatedUser(req, res);
+  if (!user) return;
+  const credential = req.body;
+  if (!credential || typeof credential !== 'object' || credential.credentialSubject?.id !== user.did) return res.status(400).json({ error: 'Credential subject must match the authenticated account DID' });
+  if (!(await verifyCredential(credential, user.did))) return res.status(400).json({ error: 'Credential signature, issuer binding, or expiry is invalid' });
+  const existing = db.select({ id: credentials.id }).from(credentials).where(eq(credentials.credentialId, String(credential.id || ''))).get();
+  if (existing) return res.status(409).json({ error: 'Credential is already registered' });
+  db.insert(credentials).values({ id: `credential_${randomBytes(10).toString('hex')}`, userId: user.id, credentialId: String(credential.id), issuerName: String(credential.issuer?.name || 'Unknown issuer'), issuedAt: String(credential.issuanceDate), expirationDate: credential.expirationDate ? String(credential.expirationDate) : null, anchorTxHash: null, revoked: false, credentialJson: JSON.stringify(credential), issuerDid: String(credential.issuer?.id || ''), subjectDid: String(credential.credentialSubject.id), credentialType: String(credential.type?.[1] || credential.type?.[0] || '') }).run();
+  res.status(201).json({ saved: true, credentialId: credential.id });
+});
+
+app.get('/api/network/graph', async (req: Request, res: Response) => {
+  const user = await requireAuthenticatedUser(req, res);
+  if (!user) return;
+  const userRows = db.select().from(users).all();
+  const credentialRows = db.select().from(credentials).all();
+  const transactionRows = db.select().from(transactions).all();
+  const flagRows = db.select().from(fraudFlags).all();
+  const nodes = userRows.filter(row => row.did).map((row, index) => {
+    const userCredentials = credentialRows.filter(credential => credential.userId === row.id);
+    const userTransactions = transactionRows.filter(transaction => transaction.userId === row.id);
+    const flagged = flagRows.some(flag => flag.userId === row.id && flag.decision !== 'VERIFIED_HUMAN');
+    return { id: row.did!, label: row.id === user.id ? 'You (Self-Sovereign Identity)' : row.email, avatarSeed: row.did!, trustScore: flagged ? 20 : Math.min(99, 50 + userCredentials.length * 10 + userTransactions.length * 2), type: flagged ? 'flagged' : row.id === user.id ? 'current_user' : 'human', createdAt: row.createdAt, credentialCount: userCredentials.length, inDegree: userCredentials.length, outDegree: userTransactions.length, eigenTrust: flagged ? 0.1 : 0.5, clusterId: flagged ? 99 : 1, isSybilSuspect: flagged, x: row.id === user.id ? 400 : 180 + (index % 4) * 180, y: row.id === user.id ? 280 : 140 + Math.floor(index / 4) * 160 };
+  });
+  const edges = credentialRows.flatMap(credential => { const holder = userRows.find(row => row.id === credential.userId)?.did; if (!holder || !credential.issuerDid) return []; return [{ id: `credential-${credential.id}`, source: credential.issuerDid, target: holder, type: 'credential_issued', weight: credential.revoked ? 0.1 : 0.9, timestamp: credential.issuedAt, isCollusionSuspect: false }]; });
+  res.json({ nodes, edges });
 });
 
 app.get('/api/blockchain/status', (req: Request, res: Response) => {

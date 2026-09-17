@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AegisDID Demo Verifier</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #071018; color: #e6f0f2; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: radial-gradient(circle at 20% 10%, #123642, #071018 52%); }
+    main { width: min(620px, calc(100% - 32px)); padding: 32px; border: 1px solid #245568; border-radius: 20px; background: rgba(12, 25, 34, .92); box-shadow: 0 24px 80px rgba(0,0,0,.35); }
+    .eyebrow { color: #b8ef78; font-size: 11px; letter-spacing: .2em; text-transform: uppercase; }
+    h1 { margin: 8px 0; font-size: 30px; }
+    p { color: #9bb0bd; line-height: 1.6; }
+    label { display: block; margin: 24px 0 8px; color: #9bb0bd; font-size: 13px; }
+    select, button { width: 100%; box-sizing: border-box; padding: 13px 14px; border-radius: 9px; border: 1px solid #365465; background: #050b14; color: #e6f0f2; font: inherit; }
+    button { margin-top: 18px; border: 0; background: #b8ef78; color: #071018; font-weight: 700; cursor: pointer; }
+    button:hover { background: #d0ff9e; }
+    #result { margin-top: 20px; padding: 14px; border-radius: 9px; display: none; white-space: pre-wrap; font-size: 13px; }
+    .success { display: block !important; border: 1px solid #248d69; background: rgba(16, 185, 129, .12); color: #a7f3d0; }
+    .error { display: block !important; border: 1px solid #a33a55; background: rgba(244, 63, 94, .12); color: #fecdd3; }
+    a { color: #65e6f2; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">Connected verifier integration</div>
+    <h1>Northstar Learning Portal</h1>
+    <p>This is a real test website served by your AegisDID project. It requests only a predicate proof and receives the result through the AegisDID widget callback. It never receives the document file.</p>
+    <label for="requirement">Verification request</label>
+    <select id="requirement">
+      <option value="ProofOfAgeCredential:age>=18">Prove age is 18 or older</option>
+      <option value="ProofOfHumanityCredential:isUniqueHuman is true">Prove unique human liveness</option>
+    </select>
+    <button id="verify" data-aegisdid="verify" data-require="ProofOfAgeCredential:age>=18">Verify with AegisDID</button>
+    <div id="result" role="status"></div>
+    <p><a href="/">Return to AegisDID</a></p>
+  </main>
+  <script src="/widget/aegisdid-verify.js"></script>
+  <script>
+    const button = document.getElementById('verify');
+    const requirement = document.getElementById('requirement');
+    const result = document.getElementById('result');
+    requirement.addEventListener('change', () => button.dataset.require = requirement.value);
+    button.addEventListener('aegisdid:verified', event => {
+      result.className = 'success';
+      result.textContent = 'VERIFIED\nHolder DID: ' + event.detail.holderDid + '\nOnly the requested predicate was received.';
+    });
+    button.addEventListener('aegisdid:rejected', () => {
+      result.className = 'error';
+      result.textContent = 'Verification rejected or unavailable. No access was granted.';
+    });
+    button.addEventListener('aegisdid:error', event => {
+      result.className = 'error';
+      result.textContent = 'Integration error: ' + event.detail.error;
+    });
+  </script>
+</body>
+</html>
