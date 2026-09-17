@@ -58,9 +58,9 @@ npm run dev
 
 Open:
 
-- App: http://localhost:3000
-- Connected verifier test site: http://localhost:3000/demo-verifier.html
-- Health check: http://localhost:3000/api/health
+- App: http://localhost:3000 or https://aegisdid.onrender.com
+- Connected verifier test site: http://localhost:3000/demo-verifier.html or https://aegisdid.onrender.com/demo-verifier.html
+- Health check: http://localhost:3000/api/health or https://aegisdid.onrender.com/api/health
 
 ## Test the verification flow
 
